@@ -20,7 +20,6 @@ import type {
   WebdavAuthType,
 } from "./baseTypes";
 
-import cloneDeep from "lodash/cloneDeep";
 import { generateAzureBlobStorageSettingsPart } from "../pro/src/settingsAzureBlobStorage";
 import { generateBoxSettingsPart } from "../pro/src/settingsBox";
 import { generateClearDupFilesSettingsPart } from "../pro/src/settingsClearDupFiles";
@@ -68,6 +67,7 @@ import {
   stringToFragment,
 } from "./misc";
 import { DEFAULT_PROFILER_CONFIG } from "./profiler";
+import { redactSettingsForLog } from "./safeSettingsLog";
 
 class PasswordModal extends Modal {
   plugin: RemotelySavePlugin;
@@ -2714,19 +2714,7 @@ export class RemotelySaveSettingTab extends PluginSettingTab {
               if (parsed.status === "error") {
                 new Notice(parsed.message);
               } else {
-                const copied = cloneDeep(parsed.result);
-                // new Notice(JSON.stringify(copied))
-                this.plugin.settings = Object.assign(
-                  {},
-                  this.plugin.settings,
-                  copied
-                );
-                this.plugin.saveSettings();
-                new Notice(
-                  t("protocol_saveqr", {
-                    manifestName: this.plugin.manifest.name,
-                  })
-                );
+                this.plugin.reviewSettingsImport(parsed.result!);
               }
             } catch (e) {
               new Notice(`${e}`);
@@ -2796,7 +2784,7 @@ export class RemotelySaveSettingTab extends PluginSettingTab {
         button.setButtonText(t("settings_outputsettingsconsole_button"));
         button.onClick(async () => {
           const c = messyConfigToNormal(await this.plugin.loadData());
-          console.info(c);
+          console.info(redactSettingsForLog(c));
           new Notice(t("settings_outputsettingsconsole_notice"));
         });
       });

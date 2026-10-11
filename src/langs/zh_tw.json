@@ -332,7 +332,7 @@
   "settings_debuglevel": "修改同步提示資訊",
   "settings_debuglevel_desc": "預設值為 \"info\"。您可以改為 \"debug\" 從而在同步時候裡獲取更多資訊。",
   "settings_outputsettingsconsole": "讀取硬碟上的設定檔案輸出到終端",
-  "settings_outputsettingsconsole_desc": "硬碟上的設定檔案是編碼過的，點選這裡從而解碼並輸出到終端。",
+  "settings_outputsettingsconsole_desc": "將設定輸出到終端，並隱藏所有字串值以保護憑據和私人網址。",
   "settings_outputsettingsconsole_button": "輸出",
   "settings_outputsettingsconsole_notice": "已輸出到終端",
   "settings_obfuscatesettingfile": "是否混淆儲存設定檔案",

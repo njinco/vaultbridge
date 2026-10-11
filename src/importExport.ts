@@ -6,9 +6,9 @@ import {
   COMMAND_URI,
   type QRExportType,
   type RemotelySavePluginSettings,
-  type UriParams,
 } from "./baseTypes";
 import { getShrinkedSettings as getShrinkedSettingsOnedrive } from "./fsOnedrive";
+import { validateImportedSettings } from "./settingsImportValidation";
 
 export const exportQrCodeUri = async (
   settings: RemotelySavePluginSettings,
@@ -77,7 +77,7 @@ export const exportQrCodeUri = async (
 export interface ProcessQrCodeResultType {
   status: "error" | "ok";
   message: string;
-  result?: RemotelySavePluginSettings;
+  result?: Partial<RemotelySavePluginSettings>;
 }
 
 /**
@@ -98,39 +98,36 @@ export const importQrCodeUri = (
   inputParams: any,
   currentVaultName: string
 ): ProcessQrCodeResultType => {
-  const params = inputParams as UriParams;
+  const params = inputParams;
   if (
-    params.func === undefined ||
+    params === null ||
+    typeof params !== "object" ||
+    Array.isArray(params) ||
     params.func !== "settings" ||
-    params.vault === undefined ||
-    params.data === undefined
+    typeof params.vault !== "string" ||
+    typeof params.data !== "string" ||
+    params.data.length > 1024 * 1024
   ) {
     return {
       status: "error",
-      message: `the uri is not for exporting/importing settings: ${JSON.stringify(
-        inputParams
-      )}`,
+      message: "Invalid settings import link.",
     };
   }
 
   if (params.vault !== currentVaultName) {
     return {
       status: "error",
-      message: `the target vault is ${
-        params.vault
-      } but you are currently in ${currentVaultName}: ${JSON.stringify(
-        inputParams
-      )}`,
+      message: "The settings import targets a different vault.",
     };
   }
 
-  let settings = {} as RemotelySavePluginSettings;
+  let settings: Partial<RemotelySavePluginSettings>;
   try {
-    settings = JSON.parse(params.data);
+    settings = validateImportedSettings(JSON.parse(params.data));
   } catch (e) {
     return {
       status: "error",
-      message: `errors while parsing settings: ${JSON.stringify(inputParams)}`,
+      message: "Invalid settings import: check its fields and values.",
     };
   }
   return {

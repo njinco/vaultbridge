@@ -1,0 +1,9 @@
+VaultBridge
+
+New personal/ source files are licensed under Apache License 2.0.
+Reuses Apache-licensed portions of Remotely Save, Copyright fyears and contributors.
+The reused misc.ts and encryptOpenSSL.ts include personal-fork buffer compatibility changes.
+The reused encryption worker suppresses raw error and filename logging for privacy.
+The personal build excludes the upstream pro/ runtime implementation.
+Third-party libraries retain their own copyright and license terms.
+Keep this NOTICE and the Apache license with any distribution.

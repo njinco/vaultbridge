@@ -1,257 +1,72 @@
-import {
-  Cipher as CipherRCloneCryptPack,
-  encryptedSize,
-} from "@fyears/rclone-crypt";
-
+// Modified for VaultBridge: bounded worker requests, shared preparation and cleanup.
+import { Cipher as CipherRCloneCryptPack, encryptedSize } from "@fyears/rclone-crypt";
 // @ts-ignore
 import EncryptWorker from "./encryptRClone.worker";
-
-interface RecvMsg {
-  status: "ok" | "error";
-  outputName?: string;
-  outputContent?: ArrayBuffer;
-  error?: any;
-}
+import { WorkerRequests } from "./workerRequests";
 
 export const getSizeFromOrigToEnc = encryptedSize;
 
 export class CipherRclone {
-  readonly password: string;
-  readonly cipher: CipherRCloneCryptPack;
-  readonly workers: Worker[];
-  init: boolean;
-  workerIdx: number;
-  constructor(password: string, workerNum: number) {
-    this.password = password;
-    this.init = false;
-    this.workerIdx = 0;
-
-    // console.debug("begin creating CipherRCloneCryptPack");
-    this.cipher = new CipherRCloneCryptPack("base64");
-    // console.debug("finish creating CipherRCloneCryptPack");
-
-    // console.debug("begin creating EncryptWorker");
-    this.workers = [];
-    for (let i = 0; i < workerNum; ++i) {
-      this.workers.push(new (EncryptWorker as any)() as Worker);
-    }
-
-    // console.debug("finish creating EncryptWorker");
-  }
-
-  closeResources() {
-    for (let i = 0; i < this.workers.length; ++i) {
-      this.workers[i].terminate();
+  readonly cipher = new CipherRCloneCryptPack("base64");
+  readonly workers: Worker[] = [];
+  readonly requests: WorkerRequests;
+  init = false;
+  workerIdx = 0;
+  private preparation?: Promise<void>;
+  constructor(readonly password: string, workerNum: number) {
+    if (!Number.isInteger(workerNum) || workerNum < 1) throw new Error("Invalid encryption worker count.");
+    try {
+      for (let i = 0; i < workerNum; i++) this.workers.push(new (EncryptWorker as any)());
+      this.requests = new WorkerRequests(this.workers);
+    } catch (error) {
+      for (const worker of this.workers) worker.terminate();
+      throw error;
     }
   }
-
+  closeResources() { this.requests.close(); }
   async prepareByCallingWorker(): Promise<void> {
-    if (this.init) {
-      return;
+    this.requests.check();
+    if (this.init) return;
+    if (!this.preparation) this.preparation = this.prepare();
+    await this.preparation;
+  }
+  private async prepare() {
+    try {
+      await this.cipher.key(this.password, "");
+      this.requests.check();
+      await Promise.all(this.workers.map((worker) => this.requests.request(worker, {
+        action: "prepare",
+        dataKeyBuf: this.cipher.dataKey.buffer,
+        nameKeyBuf: this.cipher.nameKey.buffer,
+        nameTweakBuf: this.cipher.nameTweak.buffer,
+      }, (data) => {
+        if (data?.status !== "ok") throw new Error("Encryption preparation failed.");
+      })));
+      this.requests.check();
+      this.init = true;
+    } catch (error) {
+      this.requests.close();
+      throw error;
     }
-    // console.debug("begin prepareByCallingWorker");
-    await this.cipher.key(this.password, "");
-    // console.debug("finish getting key");
-
-    const res: Promise<void>[] = [];
-    for (let i = 0; i < this.workers.length; ++i) {
-      res.push(
-        new Promise((resolve, reject) => {
-          const channel = new MessageChannel();
-
-          channel.port2.onmessage = (event) => {
-            // console.debug("main: receiving msg in prepare");
-            const { status } = event.data as RecvMsg;
-            if (status === "ok") {
-              // console.debug("main: receiving init ok in prepare");
-              this.init = true;
-              resolve(); // return the class object itself
-            } else {
-              reject("error after prepareByCallingWorker");
-            }
-          };
-
-          channel.port2.onmessageerror = (event) => {
-            // console.debug("main: receiving error in prepare");
-            reject(event);
-          };
-
-          // console.debug("main: before postMessage in prepare");
-          this.workers[i].postMessage(
-            {
-              action: "prepare",
-              dataKeyBuf: this.cipher.dataKey.buffer,
-              nameKeyBuf: this.cipher.nameKey.buffer,
-              nameTweakBuf: this.cipher.nameTweak.buffer,
-            },
-            [channel.port1 /* buffer no transfered because we need to copy */]
-          );
-        })
-      );
-    }
-    await Promise.all(res);
   }
-
-  async encryptNameByCallingWorker(inputName: string): Promise<string> {
-    // console.debug("main: start encryptNameByCallingWorker");
+  private async name(action: string, inputName: string): Promise<string> {
     await this.prepareByCallingWorker();
-    // console.debug(
-    //   "main: really start generate promise in encryptNameByCallingWorker"
-    // );
-    ++this.workerIdx;
-    const whichWorker = this.workerIdx % this.workers.length;
-    return await new Promise((resolve, reject) => {
-      const channel = new MessageChannel();
-
-      channel.port2.onmessage = (event) => {
-        // console.debug("main: receiving msg in encryptNameByCallingWorker");
-        const { outputName } = event.data as RecvMsg;
-        if (outputName === undefined) {
-          reject("unknown outputName after encryptNameByCallingWorker");
-        } else {
-          resolve(outputName);
-        }
-      };
-
-      channel.port2.onmessageerror = (event) => {
-        // console.debug("main: receiving error in encryptNameByCallingWorker");
-        reject(event);
-      };
-
-      // console.debug("main: before postMessage in encryptNameByCallingWorker");
-      this.workers[whichWorker].postMessage(
-        {
-          action: "encryptName",
-          inputName: inputName,
-        },
-        [channel.port1]
-      );
+    const worker = this.workers[++this.workerIdx % this.workers.length];
+    return this.requests.request(worker, { action, inputName }, (data) => {
+      if (data?.status !== "ok" || typeof data.outputName !== "string") throw new Error("Invalid encryption result.");
+      return data.outputName;
     });
   }
-
-  async decryptNameByCallingWorker(inputName: string): Promise<string> {
+  private async content(action: string, input: ArrayBuffer): Promise<ArrayBuffer> {
     await this.prepareByCallingWorker();
-    ++this.workerIdx;
-    const whichWorker = this.workerIdx % this.workers.length;
-    return await new Promise((resolve, reject) => {
-      const channel = new MessageChannel();
-
-      channel.port2.onmessage = (event) => {
-        // console.debug("main: receiving msg in decryptNameByCallingWorker");
-        const { outputName, status } = event.data as RecvMsg;
-
-        if (status === "error") {
-          reject("error");
-        } else {
-          if (outputName === undefined) {
-            reject("unknown outputName after decryptNameByCallingWorker");
-          } else {
-            resolve(outputName);
-          }
-        }
-      };
-
-      channel.port2.onmessageerror = (event) => {
-        // console.debug("main: receiving error in decryptNameByCallingWorker");
-        reject(event);
-        channel;
-      };
-
-      // console.debug("main: before postMessage in decryptNameByCallingWorker");
-      this.workers[whichWorker].postMessage(
-        {
-          action: "decryptName",
-          inputName: inputName,
-        },
-        [channel.port1]
-      );
-    });
+    const worker = this.workers[++this.workerIdx % this.workers.length];
+    return this.requests.request(worker, { action, inputContent: input }, (data) => {
+      if (data?.status !== "ok" || !(data.outputContent instanceof ArrayBuffer)) throw new Error("Invalid encryption result.");
+      return data.outputContent;
+    }, action === "decryptContent" ? [input] : []);
   }
-
-  async encryptContentByCallingWorker(
-    input: ArrayBuffer
-  ): Promise<ArrayBuffer> {
-    await this.prepareByCallingWorker();
-    ++this.workerIdx;
-    const whichWorker = this.workerIdx % this.workers.length;
-    return await new Promise((resolve, reject) => {
-      const channel = new MessageChannel();
-
-      channel.port2.onmessage = (event) => {
-        // console.debug("main: receiving msg in encryptContentByCallingWorker");
-        const { outputContent } = event.data as RecvMsg;
-        if (outputContent === undefined) {
-          reject("unknown outputContent after encryptContentByCallingWorker");
-        } else {
-          resolve(outputContent);
-        }
-      };
-
-      channel.port2.onmessageerror = (event) => {
-        // console.debug("main: receiving error in encryptContentByCallingWorker");
-        reject(event);
-      };
-
-      // console.debug(
-      //   "main: before postMessage in encryptContentByCallingWorker"
-      // );
-      this.workers[whichWorker].postMessage(
-        {
-          action: "encryptContent",
-          inputContent: input,
-        },
-        [
-          channel.port1,
-          // input // the array buffer might be re-used later, so we CANNOT transfer here
-        ]
-      );
-    });
-  }
-
-  async decryptContentByCallingWorker(
-    input: ArrayBuffer
-  ): Promise<ArrayBuffer> {
-    await this.prepareByCallingWorker();
-    ++this.workerIdx;
-    const whichWorker = this.workerIdx % this.workers.length;
-    return await new Promise((resolve, reject) => {
-      const channel = new MessageChannel();
-
-      channel.port2.onmessage = (event) => {
-        // console.debug("main: receiving msg in decryptContentByCallingWorker");
-        const { outputContent, status } = event.data as RecvMsg;
-
-        if (status === "error") {
-          reject("error");
-        } else {
-          if (outputContent === undefined) {
-            reject("unknown outputContent after decryptContentByCallingWorker");
-          } else {
-            resolve(outputContent);
-          }
-        }
-      };
-
-      channel.port2.onmessageerror = (event) => {
-        // console.debug(
-        //   "main: receiving onmessageerror in decryptContentByCallingWorker"
-        // );
-        reject(event);
-      };
-
-      // console.debug(
-      //   "main: before postMessage in decryptContentByCallingWorker"
-      // );
-      this.workers[whichWorker].postMessage(
-        {
-          action: "decryptContent",
-          inputContent: input,
-        },
-        [
-          channel.port1,
-          input, // not transfer for safety
-        ]
-      );
-    });
-  }
+  encryptNameByCallingWorker(input: string) { return this.name("encryptName", input); }
+  decryptNameByCallingWorker(input: string) { return this.name("decryptName", input); }
+  encryptContentByCallingWorker(input: ArrayBuffer) { return this.content("encryptContent", input); }
+  decryptContentByCallingWorker(input: ArrayBuffer) { return this.content("decryptContent", input); }
 }

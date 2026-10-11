@@ -334,7 +334,7 @@
   "settings_debuglevel": "Alter Notice Level",
   "settings_debuglevel_desc": "By default the notice level is \"info\". You can change to \"debug\" to get verbose information while syncing.",
   "settings_outputsettingsconsole": "Output Current Settings From Disk To Console",
-  "settings_outputsettingsconsole_desc": "The settings save on disk in encoded. Click this to see the decoded settings in console.",
+  "settings_outputsettingsconsole_desc": "Output settings to the console with all string values redacted to protect credentials and private URLs.",
   "settings_outputsettingsconsole_button": "Output",
   "settings_outputsettingsconsole_notice": "Finished outputing in console.",
   "settings_obfuscatesettingfile": "Obfuscate The Setting File Or Not",

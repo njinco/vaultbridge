@@ -1,0 +1,9 @@
+{
+  "id": "vaultbridge",
+  "name": "VaultBridge",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Independent manual vault sync with S3, Google Drive, Dropbox and safe Markdown conflict merging.",
+  "author": "VaultBridge contributors",
+  "isDesktopOnly": false
+}

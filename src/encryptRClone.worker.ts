@@ -1,3 +1,4 @@
+// Modified for VaultBridge: suppress raw encryption errors and filename logging.
 import { Cipher as CipherRCloneCryptPack } from "@fyears/rclone-crypt";
 import { nanoid } from "nanoid";
 
@@ -50,6 +51,7 @@ ctx.addEventListener("message", async (event: any) => {
 
   // console.debug(`worker [${workerNanoID}]: receiving action=${action}`);
 
+  try {
   if (action === "prepare") {
     // console.debug(`worker [${workerNanoID}]: prepare: start`);
     try {
@@ -73,7 +75,6 @@ ctx.addEventListener("message", async (event: any) => {
         status: "ok",
       });
     } catch (error) {
-      console.error(error);
       port.postMessage({
         status: "error",
         error: error,
@@ -95,8 +96,6 @@ ctx.addEventListener("message", async (event: any) => {
         outputName: outputName,
       });
     } catch (error) {
-      console.error(`worker [${workerNanoID}]: encryptName=${inputName}`);
-      console.error(error);
       port.postMessage({
         status: "error",
         error: error,
@@ -118,8 +117,6 @@ ctx.addEventListener("message", async (event: any) => {
         outputName: outputName,
       });
     } catch (error) {
-      console.error(`worker [${workerNanoID}]: decryptName=${inputName}`);
-      console.error(error);
       port.postMessage({
         status: "error",
         error: error,
@@ -144,7 +141,6 @@ ctx.addEventListener("message", async (event: any) => {
         [outputContent] // on worker side, we don't reuse anything so it's safe to transfer
       );
     } catch (error) {
-      console.error(error);
       port.postMessage({
         status: "error",
         error: error,
@@ -169,7 +165,6 @@ ctx.addEventListener("message", async (event: any) => {
         [outputContent] // on worker side, we don't reuse anything so it's safe to transfer
       );
     } catch (error) {
-      console.error(error);
       port.postMessage({
         status: "error",
         error: error,
@@ -180,5 +175,8 @@ ctx.addEventListener("message", async (event: any) => {
       status: "error",
       error: `worker [${workerNanoID}]: unknown action=${action}`,
     });
+  }
+  } finally {
+    port.close();
   }
 });

@@ -148,15 +148,7 @@ export const getAccessToken = async (
     return config.accessToken;
   }
 
-  console.debug(
-    `currently, accessToken=${config.accessToken}, accessTokenExpiresAtTimeMs=${
-      config.accessTokenExpiresAtTimeMs
-    }, credentialsShouldBeDeletedAtTimeMs=${
-      config.credentialsShouldBeDeletedAtTimeMs
-    },comp1=${config.accessTokenExpiresAtTimeMs > ts}, comp2=${
-      (config.credentialsShouldBeDeletedAtTimeMs ?? ts + 1000 * 1000) > ts
-    }`
-  );
+  console.debug("Remotely Save access token needs refreshing.");
 
   // try to get it again??
   const res = await sendRefreshTokenReq(config.refreshToken ?? "refresh-");

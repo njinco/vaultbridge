@@ -2,6 +2,51 @@ import { strict as assert } from "assert";
 import { JSDOM } from "jsdom";
 import * as misc from "../src/misc";
 
+describe("Misc: buffer conversion", () => {
+  it("copies only a sliced view's bytes and does not retain its backing storage", () => {
+    const source = new Uint8Array([99, 1, 2, 3, 88]);
+    const result = misc.bufferToArrayBuffer(source.subarray(1, 4));
+    assert.ok(result instanceof ArrayBuffer);
+    assert.deepEqual([...new Uint8Array(result)], [1, 2, 3]);
+    source[1] = 42;
+    assert.equal(new Uint8Array(result)[0], 1);
+  });
+
+  it("converts a DataView with a byte offset", () => {
+    const source = new Uint8Array([99, 1, 2, 88]);
+    assert.deepEqual(
+      [
+        ...new Uint8Array(
+          misc.bufferToArrayBuffer(new DataView(source.buffer, 1, 2))
+        ),
+      ],
+      [1, 2]
+    );
+  });
+
+  it("copies shared backing storage into an ordinary ArrayBuffer", () => {
+    const source = new Uint8Array(new SharedArrayBuffer(4));
+    source.set([99, 1, 2, 88]);
+    const result = misc.bufferToArrayBuffer(source.subarray(1, 3));
+    assert.ok(result instanceof ArrayBuffer);
+    assert.deepEqual([...new Uint8Array(result)], [1, 2]);
+    source[1] = 42;
+    assert.equal(new Uint8Array(result)[0], 1);
+  });
+
+  it("handles empty views and pooled Node buffers", () => {
+    assert.equal(misc.bufferToArrayBuffer(new Uint8Array(0)).byteLength, 0);
+    assert.deepEqual(
+      [
+        ...new Uint8Array(
+          misc.bufferToArrayBuffer(Buffer.from([99, 1, 2, 88]).subarray(1, 3))
+        ),
+      ],
+      [1, 2]
+    );
+  });
+});
+
 describe("Misc: hidden file", () => {
   it("should find hidden file correctly", () => {
     let item = "";

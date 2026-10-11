@@ -333,7 +333,7 @@
   "settings_debuglevel": "修改同步提示信息",
   "settings_debuglevel_desc": "默认值为 \"info\"。您可以改为 \"debug\" 从而在同步时候里获取更多信息。",
   "settings_outputsettingsconsole": "读取硬盘上的设置文件输出到终端",
-  "settings_outputsettingsconsole_desc": "硬盘上的设置文件是编码过的，点击这里从而解码并输出到终端。",
+  "settings_outputsettingsconsole_desc": "将设置输出到终端，并隐藏所有字符串值以保护凭据和私人网址。",
   "settings_outputsettingsconsole_button": "输出",
   "settings_outputsettingsconsole_notice": "已输出到终端",
   "settings_obfuscatesettingfile": "是否混淆保存设置文件",

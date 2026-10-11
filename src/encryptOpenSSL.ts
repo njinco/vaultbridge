@@ -1,3 +1,4 @@
+// Modified for VaultBridge: copy PBKDF2 salt bytes for current buffer typings.
 import { base32, base64url } from "rfc4648";
 import { bufferToArrayBuffer, hexStringToTypedArray } from "./misc";
 
@@ -24,7 +25,7 @@ const getKeyIVFromPassword = async (
   const k2 = await window.crypto.subtle.deriveBits(
     {
       name: "PBKDF2",
-      salt: salt,
+      salt: bufferToArrayBuffer(salt),
       iterations: rounds,
       hash: "SHA-256",
     },

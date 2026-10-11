@@ -11,7 +11,11 @@ import {
 } from "@azure/storage-blob";
 import type { Entity } from "../../src/baseTypes";
 import { FakeFs } from "../../src/fsAll";
-import { arrayBufferToHex, getFolderLevels } from "../../src/misc";
+import {
+  arrayBufferToHex,
+  bufferToArrayBuffer,
+  getFolderLevels,
+} from "../../src/misc";
 import type { AzureBlobStorageConfig } from "./baseTypesPro";
 
 export const simpleTransRemotePrefix = (x: string) => {
@@ -78,7 +82,7 @@ const fromBlobPropsToEntity = (
 
   let hash: undefined | string = undefined;
   if (props.contentMD5 !== undefined) {
-    hash = arrayBufferToHex(props.contentMD5.buffer);
+    hash = arrayBufferToHex(bufferToArrayBuffer(props.contentMD5));
   }
 
   const entity: Entity = {

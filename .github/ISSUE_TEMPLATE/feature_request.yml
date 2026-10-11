@@ -1,12 +1,12 @@
-name: Feature Request
-description: Some idea about new features
+name: VaultBridge Feature Request
+description: Suggest a VaultBridge improvement
 title: "[Feature Request]: "
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to fill out this bug report!
+        Describe VaultBridge behavior without including credentials, tokens, passwords, settings files or private vault notes.
   - type: textarea
     id: what-are-you-expecting
     attributes:
@@ -20,28 +20,9 @@ body:
       label: What remote cloud services are you using, or suggesting adding the feature to?
       multiple: true
       options:
-        - S3
-        - S3 (Cloudflare R2)
-        - S3 (BackBlaze B2)
-        - S3 (腾讯云 COS Tencent Cloud COS)
-        - S3 (阿里云 OSS Alibaba Cloud OSS)
-        - S3 (MinIO)
-        - S3 (Wasabi)
-        - S3 (Storj)
-        - OneDrive for personal
-        - OneDrive for business
+        - S3 / S3-compatible
+        - Google Drive
         - Dropbox
-        - webdav       
-        - webdav (ownCloud)
-        - webdav (InfiniCloud (formally TeraCLOUD))
-        - webdav (AList)
-        - webdav (Cloudreve)
-        - webdav (坚果云 JianGuoYun/NutStore)
-        - webdav (NextCloud)
-        - webdav (FastMail)
-        - webdav (rclone webdav)
-        - webdav (nginx)
-        - others
     validations:
       required: false
   - type: checkboxes

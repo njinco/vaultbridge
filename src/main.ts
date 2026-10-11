@@ -111,6 +111,9 @@ import { changeMobileStatusBar } from "./misc";
 import { DEFAULT_PROFILER_CONFIG, Profiler } from "./profiler";
 import { RemotelySaveSettingTab } from "./settings";
 import { SyncAlgoV3Modal } from "./syncAlgoV3Notice";
+import { SettingsImportModal } from "./settingsImportModal";
+import { validateImportedSettings } from "./settingsImportValidation";
+import { redactSettingsForLog } from "./safeSettingsLog";
 
 const DEFAULT_SETTINGS: RemotelySavePluginSettings = {
   s3: DEFAULT_S3_CONFIG,
@@ -589,15 +592,7 @@ export default class RemotelySavePlugin extends Plugin {
       if (parsed.status === "error") {
         new Notice(parsed.message);
       } else {
-        const copied = cloneDeep(parsed.result);
-        // new Notice(JSON.stringify(copied))
-        this.settings = Object.assign({}, this.settings, copied);
-        this.saveSettings();
-        new Notice(
-          t("protocol_saveqr", {
-            manifestName: this.manifest.name,
-          })
-        );
+        this.reviewSettingsImport(parsed.result!);
       }
     });
 
@@ -606,7 +601,7 @@ export default class RemotelySavePlugin extends Plugin {
       async (inputParams) => {
         new Notice(
           t("protocol_callbacknotsupported", {
-            params: JSON.stringify(inputParams),
+            params: JSON.stringify(redactSettingsForLog(inputParams)),
           })
         );
       }
@@ -693,7 +688,7 @@ export default class RemotelySavePlugin extends Plugin {
           new Notice(t("protocol_dropbox_connect_fail"));
           throw Error(
             t("protocol_dropbox_connect_unknown", {
-              params: JSON.stringify(inputParams),
+              params: JSON.stringify(redactSettingsForLog(inputParams)),
             })
           );
         }
@@ -777,7 +772,7 @@ export default class RemotelySavePlugin extends Plugin {
           new Notice(t("protocol_onedrive_connect_fail"));
           throw Error(
             t("protocol_onedrive_connect_unknown", {
-              params: JSON.stringify(inputParams),
+              params: JSON.stringify(redactSettingsForLog(inputParams)),
             })
           );
         }
@@ -862,7 +857,7 @@ export default class RemotelySavePlugin extends Plugin {
           new Notice(t("protocol_onedrivefull_connect_fail"));
           throw Error(
             t("protocol_onedrivefull_connect_unknown", {
-              params: JSON.stringify(inputParams),
+              params: JSON.stringify(redactSettingsForLog(inputParams)),
             })
           );
         }
@@ -885,7 +880,6 @@ export default class RemotelySavePlugin extends Plugin {
             });
         }
 
-        console.debug(inputParams);
         const authRes = await sendAuthReqPro(
           this.oauth2Info.verifier || "verifier",
           inputParams.code,
@@ -895,7 +889,6 @@ export default class RemotelySavePlugin extends Plugin {
             throw e;
           }
         );
-        console.debug(authRes);
 
         const self = this;
         await setConfigBySuccessfullAuthInplacePro(
@@ -956,7 +949,6 @@ export default class RemotelySavePlugin extends Plugin {
             });
         }
 
-        console.debug(inputParams);
         const authRes = await sendAuthReqBox(
           inputParams.code,
           async (e: any) => {
@@ -965,7 +957,6 @@ export default class RemotelySavePlugin extends Plugin {
             throw e;
           }
         );
-        console.debug(authRes);
 
         const self = this;
         await setConfigBySuccessfullAuthInplaceBox(
@@ -1012,7 +1003,6 @@ export default class RemotelySavePlugin extends Plugin {
             });
         }
 
-        console.debug(inputParams);
         const authRes = await sendAuthReqPCloud(
           inputParams.hostname,
           inputParams.code,
@@ -1022,7 +1012,6 @@ export default class RemotelySavePlugin extends Plugin {
             throw e;
           }
         );
-        console.debug(authRes);
 
         const self = this;
         await setConfigBySuccessfullAuthInplacePCloud(
@@ -1070,7 +1059,6 @@ export default class RemotelySavePlugin extends Plugin {
             });
         }
 
-        console.debug(inputParams);
         const authRes = await sendAuthReqYandexDisk(
           inputParams.code,
           async (e: any) => {
@@ -1079,7 +1067,6 @@ export default class RemotelySavePlugin extends Plugin {
             throw e;
           }
         );
-        console.debug(authRes);
 
         const self = this;
         await setConfigBySuccessfullAuthInplaceYandexDisk(
@@ -1126,7 +1113,6 @@ export default class RemotelySavePlugin extends Plugin {
             });
         }
 
-        console.debug(inputParams);
         const authRes = await sendAuthReqKoofr(
           this.settings.koofr.api,
           inputParams.code,
@@ -1137,7 +1123,6 @@ export default class RemotelySavePlugin extends Plugin {
           },
           true
         );
-        console.debug(authRes);
 
         const self = this;
         await setConfigBySuccessfullAuthInplaceKoofr(
@@ -1508,6 +1493,21 @@ export default class RemotelySavePlugin extends Plugin {
     }
 
     await this.saveSettings();
+  }
+
+  reviewSettingsImport(settings: Partial<RemotelySavePluginSettings>) {
+    const copied = cloneDeep(validateImportedSettings(settings));
+    new SettingsImportModal(this.app, copied, async () => {
+      if (this.isSyncing) throw new Error("Cannot import during sync.");
+      const previous = this.settings;
+      this.settings = { ...previous, ...copied };
+      try {
+        await this.saveSettings();
+      } catch (error) {
+        this.settings = previous;
+        throw error;
+      }
+    }).open();
   }
 
   async saveSettings() {

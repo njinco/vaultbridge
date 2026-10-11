@@ -98,7 +98,6 @@ export class ProAuthModal extends Modal {
                 throw e;
               }
             );
-            console.debug(authRes);
             const self = this;
             setConfigBySuccessfullAuthInplace(
               this.plugin.settings.pro!,

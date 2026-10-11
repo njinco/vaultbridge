@@ -1,3 +1,4 @@
+// Modified for VaultBridge: copy exact buffer ranges into ordinary ArrayBuffers.
 import * as path from "path";
 import type { Vault } from "obsidian";
 
@@ -89,8 +90,12 @@ export const mkdirpInVault = async (thePath: string, vault: Vault) => {
  */
 export const bufferToArrayBuffer = (
   b: Buffer | Uint8Array | ArrayBufferView
-) => {
-  return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+): ArrayBuffer => {
+  // Copy only this view's bytes into an ordinary ArrayBuffer. The backing
+  // storage may be shared, pooled, or larger than the view itself.
+  const result = new Uint8Array(b.byteLength);
+  result.set(new Uint8Array(b.buffer, b.byteOffset, b.byteLength));
+  return result.buffer;
 };
 
 /**

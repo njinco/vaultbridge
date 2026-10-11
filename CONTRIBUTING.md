@@ -1,22 +1,13 @@
-# Contributing
+# Contributing to VaultBridge
 
-## What
+VaultBridge is maintained for personal use. Active implementation lives in
+`personal/`; changes must keep the isolated runtime free of upstream `pro/`
+imports. Preserve copyright, license and modification notices for reused code.
 
-Starting from April 29, 2024, all individual contributors' contributions are only possibly accepted after they sign the CLA.
+Review the local build and test scripts before running them. Use the setup guide
+for the isolated build, type check and offline tests. Do not include credentials,
+tokens, passwords, vault notes or settings files in changes or issue reports.
 
-We do not accept corporate contributions at this moment.
-
-You can check out [CLA](./CLA.md).
-
-## Steps
-
-1. Make some changes to the code. Open a pull request.
-2. A rebot will check the status.
-   ![robot check](./assets/cla-process/cla-robot-alert.png)
-3. Read the [CLA](./CLA.md) carefully and make a decision.
-4. If you decide to sign the CLA, please make a comment "I have read the CLA Document and I hereby sign the CLA".
-5. If you decide to not sign the CLA, please close the PR.
-6. The robot should recheck and pass the check automatically.
-   ![robot recheck](./assets/cla-process/cla-sign-and-pass.png)
-7. Your pr will be reviewed.
-8. If you sign the CLA and submit some more PRs, the robot should pass the test automatically.
+The original upstream CLA and contribution instructions are retained under
+`upstream-reference/`. VaultBridge has no active upstream CLA workflow and does
+not ask contributors to sign an agreement with the upstream project.

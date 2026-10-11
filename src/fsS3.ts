@@ -1,3 +1,4 @@
+// Modified for VaultBridge: optional cancellation guard before each S3 request.
 import { Buffer } from "buffer";
 import * as path from "path";
 import { Readable } from "stream";
@@ -220,7 +221,7 @@ const getObjectBodyToArrayBuffer = async (
   }
 };
 
-const getS3Client = (s3Config: S3Config) => {
+const getS3Client = (s3Config: S3Config, checkRun: () => void) => {
   let endpoint = s3Config.s3Endpoint;
   if (!(endpoint.startsWith("http://") || endpoint.startsWith("https://"))) {
     endpoint = `https://${endpoint}`;
@@ -253,6 +254,15 @@ const getS3Client = (s3Config: S3Config) => {
     });
   }
 
+  s3Client.middlewareStack.add(
+    (next) => async (args) => {
+      checkRun();
+      const result = await next(args);
+      checkRun();
+      return result;
+    },
+    { step: "finalizeRequest", priority: "low", name: "vaultBridgeRunGuard" }
+  );
   s3Client.middlewareStack.add(
     (next, context) => (args) => {
       (args.request as any).headers["cache-control"] = "no-cache";
@@ -404,10 +414,10 @@ export class FakeFsS3 extends FakeFs {
   s3Client: S3Client;
   kind: "s3";
   synthFoldersCache: Record<string, Entity>;
-  constructor(s3Config: S3Config) {
+  constructor(s3Config: S3Config, checkRun: () => void = () => {}) {
     super();
     this.s3Config = s3Config;
-    this.s3Client = getS3Client(s3Config);
+    this.s3Client = getS3Client(s3Config, checkRun);
     this.kind = "s3";
     this.synthFoldersCache = {};
   }
