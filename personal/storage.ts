@@ -1,61 +1,36 @@
 // SPDX-License-Identifier: Apache-2.0
 import { PersonalSyncError } from "./errors";
 import type { Vault } from "obsidian";
-import type { Entity, S3Config } from "../src/baseTypes";
+import type { Entity } from "../src/baseTypes";
 import { FakeFs } from "../src/fsAll";
 import { FakeFsEncrypt } from "../src/fsEncrypt";
-import { FakeFsS3 } from "../src/fsS3";
+import { ConditionalS3 } from "./s3";
 import {
   CloudSession,
-  type Credentials,
   DropboxStore,
   GoogleStore,
-  type Provider,
   type Transport,
   supportedProvider,
 } from "./cloud";
-import { type Entry, type Store, included, validatePath } from "./engine";
+import {
+  digest,
+  type Entry,
+  type Store,
+  type WriteCondition,
+  included,
+  validatePath,
+} from "./engine";
 
-export type Encryption = "unset" | "none" | "openssl-base64" | "rclone-base64";
-export interface Settings {
-  provider: Provider;
-  encryption: Encryption;
-  password: string;
-  s3: S3Config;
-  dropbox: Credentials;
-  google: Credentials;
-}
-const credentials = (): Credentials => ({
-  clientId: "",
-  clientSecret: "",
-  accessToken: "",
-  refreshToken: "",
-  expiresAt: 0,
-  root: "",
-});
-export const defaults = (): Settings => ({
-  provider: "s3",
-  encryption: "unset",
-  password: "",
-  s3: {
-    s3Endpoint: "",
-    s3Region: "",
-    s3AccessKeyID: "",
-    s3SecretAccessKey: "",
-    s3BucketName: "",
-    remotePrefix: "",
-    forcePathStyle: false,
-    partsConcurrency: 4,
-    useAccurateMTime: false,
-    reverseProxyNoSignUrl: "",
-    generateFolderObject: false,
-    bypassCorsLocally: true,
-  },
-  dropbox: credentials(),
-  google: credentials(),
-});
+export { defaults, type Settings, type Encryption } from "./settings";
+import type { Settings } from "./settings";
+import { ensureParents } from "./vault";
+export { ensureParents } from "./vault";
+
 export class VaultStore implements Store {
-  constructor(readonly vault: Vault, readonly checkRun: () => void = () => {}) {}
+  constructor(
+    readonly vault: Vault,
+    readonly checkRun: () => void = () => {}
+  ) {}
   async list(): Promise<Entry[]> {
     const result: Entry[] = [],
       folders = [""];
@@ -104,25 +79,29 @@ export class VaultStore implements Store {
     this.check(path);
     return this.vault.adapter.readBinary(path);
   }
-  async write(path: string, bytes: ArrayBuffer): Promise<void> {
+  async write(
+    path: string,
+    bytes: ArrayBuffer,
+    expected?: WriteCondition
+  ): Promise<void> {
     this.check(path);
     await ensureParents(this.vault, path, this.checkRun);
     this.checkRun();
+    if (expected) {
+      const exists = await this.vault.adapter.exists(path);
+      this.checkRun();
+      if (
+        exists !== (expected.hash !== undefined) ||
+        (exists &&
+          (await digest(await this.vault.adapter.readBinary(path))) !==
+            expected.hash)
+      )
+        throw new PersonalSyncError(
+          "Local file changed just before replacement. Preview again."
+        );
+      this.checkRun();
+    }
     await this.vault.adapter.writeBinary(path, bytes);
-  }
-}
-export async function ensureParents(vault: Vault, path: string, check: () => void = () => {}) {
-  const parts = path.split("/");
-  parts.pop();
-  for (let i = 1; i <= parts.length; i++) {
-    check();
-    const folder = parts.slice(0, i).join("/");
-    const exists = await vault.adapter.exists(folder);
-    check();
-    if (!exists)
-      await vault.adapter.mkdir(folder);
-    else if ((await vault.adapter.stat(folder))?.type !== "folder")
-      throw new PersonalSyncError("File blocks a required folder.");
   }
 }
 // Adapt the Apache encryption wrapper to the independent provider interface.
@@ -190,10 +169,12 @@ export async function openRemote(
   transport: Transport,
   persist: () => Promise<void>,
   checkRun: () => void = () => {}
-): Promise<Store & { close(): Promise<void> }> {
+): Promise<Store & { close(): Promise<void>; accountId?: string }> {
   checkRun();
   if (!supportedProvider(settings.provider))
-    throw new PersonalSyncError("Choose S3, Google Drive or Dropbox in settings.");
+    throw new PersonalSyncError(
+      "Choose S3, Google Drive or Dropbox in settings."
+    );
   if (settings.encryption === "unset")
     throw new PersonalSyncError(
       "Select the encryption format of your existing remote before previewing."
@@ -203,6 +184,7 @@ export async function openRemote(
       "Enter your existing encryption password locally."
     );
   let inner: FakeFs;
+  let accountId: string | undefined;
   if (settings.provider === "s3") {
     const s = settings.s3;
     if (
@@ -230,7 +212,7 @@ export async function openRemote(
       throw new PersonalSyncError(
         "Unsigned reverse proxies are not supported by VaultBridge."
       );
-    inner = new FakeFsS3(s, checkRun);
+    inner = new ConditionalS3(s, checkRun);
   } else {
     const session = new CloudSession(
       settings.provider,
@@ -238,6 +220,8 @@ export async function openRemote(
       transport,
       persist
     );
+    accountId = await session.accountIdentity();
+    checkRun();
     inner = new StoreFs(
       settings.provider === "google"
         ? new GoogleStore(session)
@@ -250,6 +234,7 @@ export async function openRemote(
     settings.encryption === "none" ? "openssl-base64" : settings.encryption
   );
   return {
+    accountId,
     async list() {
       if (settings.encryption === "none" && !(await cipher.isPasswordOk()).ok)
         throw new PersonalSyncError(

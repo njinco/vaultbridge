@@ -80,6 +80,33 @@ async function runPreview(
   }
   class Setting {
     constructor(_el: unknown) {}
+    setName() {
+      return this;
+    }
+    addText(f: (t: any) => void) {
+      const t = {
+        onChange() {
+          return t;
+        },
+      };
+      f(t);
+      return this;
+    }
+    addDropdown(f: (d: any) => void) {
+      const d = {
+        addOptions() {
+          return d;
+        },
+        setValue() {
+          return d;
+        },
+        onChange() {
+          return d;
+        },
+      };
+      f(d);
+      return this;
+    }
     addButton(f: (b: typeof button) => void) {
       f(button);
       return this;
@@ -104,7 +131,7 @@ async function runPreview(
       assert.equal(url.hostname, "s3.example.test");
       if (url.searchParams.get("list-type") === "2") {
         assert.equal(url.searchParams.get("prefix"), "existing/");
-        const xml = `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bucket</Name><IsTruncated>false</IsTruncated><KeyCount>1</KeyCount><Contents><Key>existing/${key}</Key><LastModified>2024-01-01T00:00:00.000Z</LastModified><Size>${content.byteLength}</Size><StorageClass>STANDARD</StorageClass></Contents></ListBucketResult>`;
+        const xml = `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bucket</Name><IsTruncated>false</IsTruncated><KeyCount>1</KeyCount><Contents><Key>existing/${key}</Key><LastModified>2024-01-01T00:00:00.000Z</LastModified><Size>${content.byteLength}</Size><ETag>"existing-version"</ETag><StorageClass>STANDARD</StorageClass></Contents></ListBucketResult>`;
         return {
           status: 200,
           headers: { "content-type": "application/xml" },
@@ -117,6 +144,7 @@ async function runPreview(
         headers: {
           "content-type": "application/octet-stream",
           "content-length": String(content.byteLength),
+          etag: '"existing-version"',
         },
         arrayBuffer: content,
       };
@@ -173,6 +201,7 @@ async function runPreview(
     settings: {
       provider: "s3",
       encryption,
+      exclusions: "",
       password:
         encryption === "none" || encryption === "unset"
           ? ""

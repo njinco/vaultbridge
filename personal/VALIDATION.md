@@ -2,6 +2,49 @@
 
 ## Automated results
 
+The guided-setup/review pass passed the isolated build, dependency audit,
+TypeScript check and 255 offline compatibility tests locally on Node.js 22.
+Fourteen added tests exercise bounded exclusion globs and traversal rejection,
+safe setup messages, connection/sample reads without uploads or note changes,
+empty-target limitations, exclusions on both sides, selection and hidden checked
+files, unchanged unchecked baselines, disabled empty selections, preservation
+of interrupted work outside a selection, three-version merge rendering without
+HTML execution, completed/failed/cancelled reports, bounded retention, allowlisted
+local diagnostic exports, schema migration and export cancellation on unload.
+The local `0.1.0-rc.5` candidate includes these features; archive contents,
+build files and SHA-256 checksums are verified during packaging. The UI tests
+use JSDOM and mocked Obsidian APIs; real device behavior remains unverified.
+
+The pre-trial correctness pass passed the isolated build, dependency audit,
+TypeScript check and all 241 compatibility tests locally on Node.js 22.
+New coverage exercises conditional S3 create/update races, version-bound reads,
+unsupported conditions without fallback, single-PUT uploads above 5 MiB, local
+edits during upload and folder creation, serialized settings snapshots, stable
+account history across token rotation, account separation, and actionable
+Dropbox identity-scope failures. Journal tests cover saving before writes,
+lost upload replies, cancellation, restart without replay, failed journal saves,
+and clearing only after verified completion. All transport and vault responses
+are simulated. The local `0.1.0-rc.4` candidate includes these changes; its archive
+contents, build files and SHA-256 checksums are verified during packaging.
+
+The repository/usability improvement pass passed the isolated build, dependency
+audit, TypeScript check and 218 compatibility tests locally on Node.js 22.
+The new coverage exercises malformed/future saved state, failed settings reads
+and password migration saves, unchanged-file read counts and checkpoint rollback,
+bounded conflict comparisons, backup restore/undo verification and failures,
+changed-file cleanup rejection, cancellation and preservation of new backups.
+JSDOM controls also exercise the actual bundle's filtering, conflict choices,
+safe text rendering, progress, recovery acceptance, local restore and reviewed
+trash cleanup. These are simulated APIs and DOM controls, not a real Obsidian UI.
+
+The active CI workflow is configured for Node.js 22 and 24; hosted GitHub runs
+have not been observed in this local checkout. Dependency classification changed
+without changing any locked package versions or adding/removing packages.
+The local `0.1.0-rc.3` candidate includes these improvements, with packaging
+verification of archive contents, build files and SHA-256 checksums.
+Real Linux/Android, live-provider and device trash/restore behavior remain
+deferred and unverified.
+
 The worker/cancellation check passed the isolated build, TypeScript check and all
 188 tests in `test:compatibility`. Package/lockfile/manifests/version-map metadata
 agree, and active entry-point documentation links resolve locally. The default
@@ -105,6 +148,23 @@ not replace the real-device trial.
 8. Repeat with temporary folders and separately authorized own apps for
    Dropbox and Drive. Check encryption in the provider UI
    and repeat the two-device merge/conflict steps.
+9. On the disposable S3 prefix, verify the provider rejects an update with a
+   stale object ETag and a create with `If-None-Match: *` when the key already
+   exists. Do not use a provider that silently ignores those conditions.
+10. In disposable vaults, edit a destination during a merge upload and confirm
+    Apply stops before replacing the local edit. Interrupt an Apply, reload,
+    inspect its journal and backups, then generate a fresh preview. Confirm
+    startup makes no automatic writes and a completed Apply clears its journal.
+11. For Drive and Dropbox, allow token refresh, then check a second independent
+    edit still merges against the common version. Switching accounts should
+    use separate history. Existing Dropbox apps need `account_info.read` and
+    reauthorization before identity lookup can succeed.
+12. Check connection in settings. Review excluded paths on both devices and
+    verify excluded notes/attachments remain unchanged after Apply. Uncheck a
+    changed file, filter the list and confirm only checked files apply. Inspect
+    an automatic merged result before applying, then browse that run's result
+    and backups. Export diagnostics and inspect the local JSON for the promised
+    counts and absence of credentials, targets, filenames and note contents.
 
 The original Remotely Save plugin and other sync plugins must be disabled in
 these test vaults. Deletion/rename propagation is not implemented: missing

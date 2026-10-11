@@ -16,6 +16,7 @@ class MemoryStore implements Store {
   writes = 0;
   failWrite = false;
   failList = false;
+  reads = 0;
   constructor(data: Record<string, string>) {
     for (const [k, v] of Object.entries(data)) this.files.set(k, bytes(v));
   }
@@ -27,6 +28,7 @@ class MemoryStore implements Store {
     }));
   }
   async read(path: string) {
+    this.reads++;
     const b = this.files.get(path);
     if (!b) throw Error("not found");
     return b.slice(0);
@@ -55,6 +57,149 @@ const base = async (text: string): Promise<History> => ({
   "a.md": { hash: await digest(bytes(text)), text },
 });
 describe("Independent personal sync engine", () => {
+  it("preserves a local edit made while a merged remote upload is in flight", async () => {
+    const original = "one\ntwo\nthree\n";
+    const l = new MemoryStore({ "a.md": "ONE\ntwo\nthree\n" }),
+      r = new MemoryStore({ "a.md": "one\ntwo\nTHREE\n" });
+    const history = await base(original),
+      plan = await preview(l, r, history),
+      h = hooks();
+    const write = r.write.bind(r);
+    r.write = async (path, content) => {
+      await write(path, content);
+      l.files.set("a.md", bytes("new local edit"));
+    };
+    await assert.rejects(
+      apply(plan, l, r, history, h),
+      /changed after preview/
+    );
+    assert.equal(str(l.files.get("a.md")!), "new local edit");
+    assert.equal(l.writes, 0);
+    assert.equal(history["a.md"].text, original);
+    assert.equal(h.backups.length, 2);
+  });
+  it("preserves a local edit made while the overwrite backup is saved", async () => {
+    const l = new MemoryStore({ "a.md": "base" }),
+      r = new MemoryStore({ "a.md": "remote edit" });
+    const history = await base("base"),
+      plan = await preview(l, r, history);
+    await assert.rejects(
+      apply(plan, l, r, history, {
+        ...hooks(),
+        backup: async () => {
+          l.files.set("a.md", bytes("new edit"));
+        },
+      }),
+      /changed after preview/
+    );
+    assert.equal(str(l.files.get("a.md")!), "new edit");
+    assert.equal(l.writes, 0);
+  });
+  it("does not replace a missing destination that appeared after preflight", async () => {
+    const l = new MemoryStore({}),
+      r = new MemoryStore({ "a.md": "remote" });
+    await assert.rejects(
+      apply(
+        await preview(l, r, {}),
+        l,
+        r,
+        {},
+        {
+          ...hooks(),
+          record: async (_path, phase) => {
+            if (phase === "write-local")
+              l.files.set("a.md", bytes("new local file"));
+          },
+        }
+      ),
+      /changed after preview/
+    );
+    assert.equal(str(l.files.get("a.md")!), "new local file");
+    assert.equal(l.writes, 0);
+  });
+  it("stops before a remote write when saving its journal marker fails", async () => {
+    const l = new MemoryStore({ "a.md": "local" }),
+      r = new MemoryStore({});
+    await assert.rejects(
+      apply(
+        await preview(l, r, {}),
+        l,
+        r,
+        {},
+        {
+          ...hooks(),
+          record: async () => {
+            throw Error("journal failed");
+          },
+        }
+      ),
+      /journal failed/
+    );
+    assert.equal(r.writes, 0);
+  });
+  it("validates unchanged files once during Apply and saves their new baselines in one checkpoint", async () => {
+    const l = new MemoryStore({ "a.md": "a", "b.md": "b" }),
+      r = new MemoryStore({ "a.md": "a", "b.md": "b" });
+    const history: History = {},
+      plan = await preview(l, r, history),
+      h = hooks();
+    l.reads = r.reads = 0;
+    await apply(plan, l, r, history, h);
+    assert.equal(l.reads, 2);
+    assert.equal(r.reads, 2);
+    assert.equal(h.saved.length, 1);
+    assert.equal(l.writes + r.writes, 0);
+    const next = hooks();
+    await apply(await preview(l, r, history), l, r, history, next);
+    assert.equal(next.saved.length, 0);
+  });
+  it("still stops all writes when an unchanged file changes after preview", async () => {
+    const l = new MemoryStore({ "a.md": "upload", "z.md": "same" }),
+      r = new MemoryStore({ "z.md": "same" });
+    const plan = await preview(l, r, {});
+    r.files.set("z.md", bytes("new edit"));
+    await assert.rejects(
+      apply(plan, l, r, {}, hooks()),
+      /changed after preview/
+    );
+    assert.equal(l.writes + r.writes, 0);
+  });
+  it("does not advance in-memory history when checkpoint persistence fails", async () => {
+    for (const equal of [true, false]) {
+      const l = new MemoryStore({ "a.md": "a" }),
+        r = new MemoryStore(equal ? { "a.md": "a" } : {}),
+        history: History = {};
+      await assert.rejects(
+        apply(await preview(l, r, history), l, r, history, {
+          ...hooks(),
+          checkpoint: async () => {
+            throw Error("save failed");
+          },
+        }),
+        /save failed/
+      );
+      assert.equal(history["a.md"], undefined);
+    }
+  });
+  it("reports bounded progress for preview, validation and Apply", async () => {
+    const l = new MemoryStore({ "a.md": "a" }),
+      r = new MemoryStore({});
+    const progress: { phase: string; completed: number; total: number }[] = [];
+    const plan = await preview(l, r, {}, (p) => progress.push(p));
+    await apply(
+      plan,
+      l,
+      r,
+      {},
+      { ...hooks(), progress: (p) => progress.push(p) }
+    );
+    for (const phase of ["preview", "validate", "apply"]) {
+      const entries = progress.filter((p) => p.phase === phase);
+      assert.equal(entries[0].completed, 0);
+      assert.equal(entries.at(-1)!.completed, 1);
+      assert.ok(entries.every((p) => p.completed <= p.total));
+    }
+  });
   it("does not display credentials embedded in raw SDK exceptions", () => {
     assert.ok(
       !publicError(new Error("private-token signed-url")).includes(

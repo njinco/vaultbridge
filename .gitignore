@@ -16,5 +16,13 @@ data.json
 # debug
 logs.txt
 
-# hidden files
-.*
+# local configuration and secrets
+.env
+.env.*
+!.env.example.txt
+.aws/
+.codex/
+.agents/
+.obsidian/
+.DS_Store
+__pycache__/

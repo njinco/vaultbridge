@@ -25,6 +25,12 @@ explicitly choose a supported service; it is never redirected automatically.
 
 - Manual **Preview VaultBridge sync** command/ribbon button, followed by an Apply
   button. Loading the plugin makes no cloud requests and starts no sync timer.
+- Settings provide a setup checklist and **Check connection**. The check lists
+  local/remote files, confirms cloud account identity and reads one eligible
+  remote sample up to the file limit. It makes no uploads or note changes;
+  OAuth refresh may save updated credentials. Empty targets cannot confirm a
+  password by content, and the check does not prove write permissions, validate
+  all contents or test provider enforcement of conditional writes.
 - Uploads and downloads normal vault files within the selected remote folder or
   S3 prefix. Listings are fully paginated before an apply plan is offered.
 - Compares SHA-256 content hashes instead of trusting modification times.
@@ -34,11 +40,41 @@ explicitly choose a supported service; it is never redirected automatically.
   keeping both originals untouched. Applying the plan saves both versions for
   manual review. A preview dropdown can explicitly choose the local or remote
   version, backing up the version it replaces.
+- Changed files have selection checkboxes, initially checked. Apply includes
+  selected files even when filters hide them; unchecked files get no writes,
+  backups or history updates. Equal files are still validated for common history.
+  Selecting no changed files disables Apply unless the entire plan is equal.
+  Interrupted work cannot be cleared by a selection or exclusion hiding its
+  unfinished files; include them in a fresh review first.
+- Search/action filters change only the preview view. Markdown conflicts have an on-demand local/remote line
+  comparison, limited to 128 KiB combined and 2,000 lines. Other content stays
+  available in preserved backups. Preview and Apply show file progress counts.
+- Automatic Markdown merges offer **Preview merged result**, showing local,
+  remote and proposed final text before Apply. All three versions together are
+  bounded to 128 KiB and 2,000 lines; content is rendered as text. Deselect larger
+  merges if you need to inspect them outside the app before applying.
 - Saves local copies of overwritten files and remote copies before overwriting
   them in `_personal_sync_backups/<run>/local/` and `remote/`. These backups are
   visible locally and excluded from sync. Backups are not automatically pruned.
+- **Browse VaultBridge backups** (command or settings button) lists backup
+  files by run. **Review restore** shows a source and destination before
+  **Restore reviewed file** replaces a local file. Existing local content gets
+  a verified undo backup first. A changed source/destination stops restoration.
+  Restore affects local files only; preview sync to review cloud changes.
+  Optional retention cleanup keeps at least one newest run, lists the older
+  files, then moves only reviewed files to the vault's `.trash` after a separate
+  action. Nothing is automatically pruned; empty run folders can remain.
 - Excludes hidden files/directories, vault configuration, old Remotely Save
   metadata and debug files. Does not import the original plugin's ignore rules.
+- Custom exclusions apply to both sides before content reads. Enter one
+  case-sensitive relative rule per line: `Archive/` excludes that root folder,
+  `**/cache/` excludes cache folders at any depth, `*.pdf` matches basenames at
+  any depth, and `attachments/**` matches descendants. `*` and `?` stay within
+  a path segment; `**` crosses folders. Lines beginning with `#` are comments.
+  Negation, parent paths and regex syntax are unsupported. Limits are 100 rules,
+  256 characters per rule and 8 KiB total. Connection checks and sync previews
+  list the actual excluded local/remote filenames, with pagination. Built-in
+  exclusions remain enforced and their files are not part of this custom list.
 - Missing files are restored from the other side. **Deletion and rename
   propagation are not implemented**; a rename is treated as a new file and the
   old path can be restored. Empty folders are not synced.
@@ -46,6 +82,40 @@ explicitly choose a supported service; it is never redirected automatically.
   before saving a new baseline. This is not a distributed transaction: keep
   other writers idle while applying. Providers can change files between a check
   and an upload. A partial failure preserves backups and requires a new preview.
+  Local destinations are checked again after remote uploads and after creating
+  parent folders. Obsidian's adapter does not provide atomic compare-and-swap,
+  so a small filesystem race remains between the final check and write.
+- Apply validates unchanged files once and batches their new merge baselines
+  into one save, avoiding repeated downloads and saves for already equal files.
+  Changed files retain close-to-write checks and post-write verification.
+- Settings use schema version 3. Valid unversioned/schema-1/schema-2 state is migrated in memory;
+  optional S3 defaults are filled. Invalid/missing fields or history require
+  explicit recovery in settings. Keep a private copy of `data.json` before
+  accepting recovery. Valid credentials survive; invalid fields use defaults.
+  Unreadable JSON and unsupported schema versions are not replaced: disable the
+  plugin, privately copy/repair `data.json` or use the matching plugin version,
+  then reload. Startup recovery makes no cloud requests.
+- Saved changes are queued as independent snapshots, so overlapping field
+  edits cannot finish saving in the wrong order. A failed save is reported to
+  its caller and later saves remain usable.
+- Each Apply records a journal before sync writes, updates its per-file phase
+  before backups/replacements, and clears the target's journal after a successful
+  run. Restart shows unfinished journals in settings and in that target's next
+  preview. A pending write may have completed; verify actual files and backups
+  through a fresh preview. There is no automatic replay or rollback. Failed or
+  cancelled runs and failed final saves retain their markers. Journals contain
+  file paths/actions, not content or credentials, and are limited to 10,000
+  changed files per run. They are stored locally with plugin settings; durability
+  follows Obsidian's save API and the device filesystem.
+- **View VaultBridge sync results** keeps the last 20 Apply attempts locally,
+  including completed, failed and cancelled runs, selected/skipped action counts,
+  verified files, preserved conflicts and links to that run's backups. Preview
+  cancellation is not an Apply attempt. Abrupt process termination can leave a
+  journal without a final report. Failed result saves are reported explicitly.
+  **Export redacted diagnostics** writes a new JSON file in the hidden,
+  sync-excluded `.vaultbridge-diagnostics/` folder. Export contains app version,
+  run IDs, timestamps, provider names, statuses and counts; credentials, targets,
+  account IDs, file paths, contents, journals and provider exceptions are omitted.
 
 The first version supports desktop and mobile browser runtimes. **Real Obsidian
 desktop/mobile and live cloud testing have not yet been performed.** Tests use
@@ -71,6 +141,9 @@ node personal/build.mjs
 
 The default npm commands are `npm run build --ignore-scripts`,
 `npm run typecheck --ignore-scripts` and `npm test --ignore-scripts`.
+Run `npm run check:dependencies --ignore-scripts` after building to verify that
+direct runtime dependencies appear in the audited bundle. Retained provider,
+type and test dependencies are classified as development dependencies.
 `build:personal` and `test:personal` remain aliases. Use
 `npm run test:compatibility --ignore-scripts` for the full retained regression
 suite. Bundle tests skip when build artifacts
@@ -83,7 +156,7 @@ retained sources/tests remain in the development toolchain but are not all
 included in the audited plugin bundle.
 
 After reviewing `personal/package_release.py`, create a local candidate with
-`python3 personal/package_release.py --label rc.1`. It packages the existing
+`python3 personal/package_release.py --label rc.5`. It packages the existing
 build under `dist/personal/release-candidate-<version>-<label>-<hash>/`, verifies
 ZIP contents and checksums, and includes legal files for audited third-party
 dependencies. It does not rebuild, install, enable, publish or contact a cloud
@@ -130,12 +203,33 @@ OpenSSL-encrypted names are detected when unencrypted is mistakenly selected.
 Unencrypted rclone names cannot reliably be recognized without their password.
 
 No production S3 objects have been inspected or changed during development.
+VaultBridge reads objects with their listed ETag and uploads with a signed
+`If-Match` condition for replacements or `If-None-Match: *` for new keys. The
+50 MiB plaintext limit allows a single PUT, including encryption overhead;
+multipart uploads and automatic SDK retries are not used by this adapter.
+Missing/unusable ETags, conflicts and unsupported conditional requests stop
+sync; there is no unconditional fallback. S3-compatible providers must actually
+enforce these headers. A provider that silently ignores them cannot be proven
+safe by offline tests: verify rejected stale-version/new-key writes on disposable
+data during the provider trial. See [AWS conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html).
+
 Compatibility tests cover the existing prefix, OpenSSL byte/name format, and
 rclone encrypted upload/download using the actual bundled worker implementation.
 The rclone suite covers Unicode/nested names, binary block boundaries, empty
 files, wrong passwords, modified ciphertext, short truncation, conflict merging,
 backups, cancellation and session-only password persistence. It still needs
 an end-to-end test in real Obsidian desktop/mobile.
+
+Google Drive and Dropbox merge history now uses the provider's account ID,
+your OAuth app ID, target folder and encryption settings. Refresh/access-token
+rotation keeps the same baseline; switching account/folder/password separates
+it. The account ID is fetched read-only on each preview before choosing history.
+Matching old token-based history is copied to the new namespace without removing
+the old copy. History already stranded by a prior token rotation cannot be
+reliably matched from its hashed key; it remains untouched and divergent files
+use conservative first-sync conflict handling. Never guess or combine unrelated
+account histories. Schema-3 settings require this candidate or a newer one;
+older candidates reject them. Keep a private copy before upgrading/downgrading.
 
 The legacy rclone format authenticates individual content blocks, not a whole
 file's expected length or version. Tests demonstrate that removing a complete
@@ -202,7 +296,9 @@ the entire settings file between devices while they are actively syncing.
 
 **Dropbox:** register your own scoped Dropbox app. Choose App Folder access for
 a smaller scope, or Full Dropbox if your existing files require it. Grant
-`files.metadata.read`, `files.content.read`, and `files.content.write` scopes.
+`files.metadata.read`, `files.content.read`, `files.content.write`, and
+`account_info.read` scopes. Existing authorizations may need to be repeated
+after enabling the account-information scope.
 Register a redirect URI you control; use that exact URI in the authorization
 settings. The flow uses PKCE and offline access. Create the vault folder in the
 app's accessible root first, then enter its path relative to that root.

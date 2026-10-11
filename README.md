@@ -24,6 +24,7 @@ The default build writes its files only under `dist/personal/`:
 ```sh
 npm ci --ignore-scripts
 npm run build --ignore-scripts
+npm run check:dependencies --ignore-scripts
 npm run typecheck --ignore-scripts
 npm test --ignore-scripts
 ```
@@ -39,6 +40,22 @@ Sync is manual: preview first, then apply the reviewed plan. Separate Markdown
 edits merge against a saved common version; overlapping edits and binary
 conflicts preserve both versions for review. Overwrites retain local backups.
 Deletion/rename propagation and automatic scheduled sync are not implemented.
+
+Setup offers a checklist and a connection check that lists the target and reads
+one bounded sample without uploading. Custom exclusions apply to both sides.
+Preview includes file selection, search/action filters, progress counts, bounded
+Markdown conflict comparisons and a proposed merged-result view. Apply includes
+checked files, including hidden checked files; unchecked files stay untouched.
+The **Browse VaultBridge backups** command restores local copies with an
+undo backup and offers reviewed cleanup of older runs into the vault's `.trash`.
+No backups are automatically removed. Saved settings are versioned and validated;
+damaged fields require review, and unreadable/future settings remain blocked.
+Interrupted runs leave per-file journal markers for a fresh preview. Local
+replacements get final checks after uploads/folder creation; S3 reads/writes
+carry object-version conditions. Cloud merge history survives OAuth token
+rotation, and settings saves run in order with independent snapshots.
+The last 20 Apply results include counts and backup links. Redacted diagnostic
+exports omit credentials, targets, file paths and note contents.
 
 Cancel or close the preview dialog to stop further work. During Apply, an
 already-issued request or write can finish; the plugin stays locked until it
@@ -69,5 +86,9 @@ VaultBridge's active setup. Original source remains in `src/` and `pro/` with
 its license files. Git history and format-specific identifiers remain intact.
 Archived workflows are inactive; no automatic publishing or upstream CLA bot
 is configured for VaultBridge.
+
+VaultBridge's own CI checks the build, dependency audit, types, compatibility
+tests and candidate packaging. See [CONTRIBUTING](./CONTRIBUTING.md) for Git LFS
+setup and the separation of runtime and retained development dependencies.
 
 The remaining development agenda is tracked in [ROADMAP](./personal/ROADMAP.md).

@@ -2,6 +2,7 @@
 import { PersonalSyncError } from "./errors";
 // Independent personal sync implementation; does not use the upstream PRO engine.
 import { diff3Merge } from "node-diff3";
+import type { JournalPhase } from "./journal";
 
 export interface Entry {
   path: string;
@@ -10,7 +11,14 @@ export interface Entry {
 export interface Store {
   list(): Promise<Entry[]>;
   read(path: string): Promise<ArrayBuffer>;
-  write(path: string, bytes: ArrayBuffer): Promise<void>;
+  write(
+    path: string,
+    bytes: ArrayBuffer,
+    expected?: WriteCondition
+  ): Promise<void>;
+}
+export interface WriteCondition {
+  hash?: string;
 }
 export interface Baseline {
   hash: string;
@@ -29,6 +37,13 @@ export interface Change {
 export interface Plan {
   changes: Change[];
 }
+export interface Progress {
+  phase: "preview" | "validate" | "apply";
+  completed: number;
+  total: number;
+  path?: string;
+}
+export type ReportProgress = (progress: Progress) => void;
 const MAX_FILE = 50 * 1024 * 1024;
 const MAX_PLAN = 256 * 1024 * 1024;
 const MAX_TEXT = 1024 * 1024;
@@ -141,7 +156,8 @@ function checkNames(paths: Iterable<string>) {
 export async function preview(
   local: Store,
   remote: Store,
-  history: History
+  history: History,
+  report?: ReportProgress
 ): Promise<Plan> {
   // Complete both inventories before computing anything that could be applied.
   const [l, r] = await Promise.all([index(local), index(remote)]);
@@ -149,6 +165,7 @@ export async function preview(
   checkNames(paths);
   const changes: Change[] = [];
   let total = 0;
+  report?.({ phase: "preview", completed: 0, total: paths.size });
   for (const path of Array.from(paths).sort()) {
     const a = l.has(path) ? await local.read(path) : undefined;
     const b = r.has(path) ? await remote.read(path) : undefined;
@@ -177,6 +194,8 @@ export async function preview(
     } else if (ah === bh) {
       c.action = "equal";
       c.result = a;
+      // Equal copies need only one retained buffer; actual contents were hashed.
+      c.remote = a;
     } else if (base?.hash === bh) {
       c.action = "upload";
       c.result = a;
@@ -207,6 +226,12 @@ export async function preview(
           : "No shared version saved on this device";
     }
     changes.push(c);
+    report?.({
+      phase: "preview",
+      completed: changes.length,
+      total: paths.size,
+      path,
+    });
   }
   return { changes };
 }
@@ -214,18 +239,22 @@ async function assertUnchanged(
   store: Store,
   inventory: Map<string, Entry>,
   path: string,
-  expected?: ArrayBuffer
+  expected?: ArrayBuffer,
+  expectedHash?: string
 ) {
   if (inventory.has(path) !== (expected !== undefined))
     throw new PersonalSyncError("Files changed after preview. Preview again.");
   if (
     expected &&
-    (await digest(await store.read(path))) !== (await digest(expected))
+    (await digest(await store.read(path))) !==
+      (expectedHash ?? (await digest(expected)))
   ) {
     throw new PersonalSyncError("Files changed after preview. Preview again.");
   }
 }
 export interface ApplyHooks {
+  progress?: ReportProgress;
+  record?(path: string, phase: JournalPhase): Promise<void>;
   backup(
     path: string,
     side: "local" | "remote",
@@ -242,35 +271,126 @@ export async function apply(
 ): Promise<number> {
   const [li, ri] = await Promise.all([index(local), index(remote)]);
   checkNames(new Set([...li.keys(), ...ri.keys()]));
+  const hashes = new WeakMap<ArrayBuffer, string>();
+  const hashOf = async (bytes?: ArrayBuffer) => {
+    if (!bytes) return undefined;
+    let hash = hashes.get(bytes);
+    if (hash === undefined) {
+      hash = await digest(bytes);
+      hashes.set(bytes, hash);
+    }
+    return hash;
+  };
+  let validated = 0;
+  hooks.progress?.({
+    phase: "validate",
+    completed: 0,
+    total: plan.changes.length,
+  });
   // Fail before the first write if any previewed file was edited/deleted/created.
   for (const c of plan.changes) {
     if (!included(c.path)) throw new PersonalSyncError("Invalid plan path.");
-    await assertUnchanged(local, li, c.path, c.local);
-    await assertUnchanged(remote, ri, c.path, c.remote);
+    await assertUnchanged(local, li, c.path, c.local, await hashOf(c.local));
+    await assertUnchanged(remote, ri, c.path, c.remote, await hashOf(c.remote));
+    if (
+      c.action === "equal" &&
+      (!c.local ||
+        !c.remote ||
+        !c.result ||
+        (await hashOf(c.local)) !== (await hashOf(c.remote)) ||
+        (await hashOf(c.result)) !== (await hashOf(c.local)))
+    )
+      throw new PersonalSyncError("Invalid unchanged-file plan.");
+    hooks.progress?.({
+      phase: "validate",
+      completed: ++validated,
+      total: plan.changes.length,
+      path: c.path,
+    });
   }
   let conflicts = 0;
+  let completed = 0;
+  const equalHistory: History = Object.create(null);
+  hooks.progress?.({
+    phase: "apply",
+    completed: 0,
+    total: plan.changes.length,
+  });
   for (const c of plan.changes) {
+    if (c.action === "equal") {
+      // Preflight confirmed convergence. No writes need another content check.
+      const baseline = {
+        hash: (await hashOf(c.result))!,
+        text: c.path.toLowerCase().endsWith(".md")
+          ? textOf(c.result!)
+          : undefined,
+      };
+      if (
+        history[c.path]?.hash !== baseline.hash ||
+        history[c.path]?.text !== baseline.text
+      )
+        equalHistory[c.path] = baseline;
+      hooks.progress?.({
+        phase: "apply",
+        completed: ++completed,
+        total: plan.changes.length,
+        path: c.path,
+      });
+      continue;
+    }
     // Recheck close to writing as well; remote services do not offer a cross-provider transaction.
-    await assertUnchanged(local, li, c.path, c.local);
-    await assertUnchanged(remote, ri, c.path, c.remote);
+    await assertUnchanged(local, li, c.path, c.local, await hashOf(c.local));
+    await assertUnchanged(remote, ri, c.path, c.remote, await hashOf(c.remote));
     if (c.action === "conflict") {
-      if (c.local) await hooks.backup(c.path, "local", c.local);
-      if (c.remote) await hooks.backup(c.path, "remote", c.remote);
+      if (c.local) {
+        await hooks.record?.(c.path, "backup-local");
+        await hooks.backup(c.path, "local", c.local);
+      }
+      if (c.remote) {
+        await hooks.record?.(c.path, "backup-remote");
+        await hooks.backup(c.path, "remote", c.remote);
+      }
+      await hooks.record?.(c.path, "preserved");
       conflicts++;
+      hooks.progress?.({
+        phase: "apply",
+        completed: ++completed,
+        total: plan.changes.length,
+        path: c.path,
+      });
       continue;
     }
     if (!c.result)
       throw new PersonalSyncError("Invalid plan: missing content.");
-    if (["download", "merge"].includes(c.action) && c.local)
+    if (["download", "merge"].includes(c.action) && c.local) {
+      await hooks.record?.(c.path, "backup-local");
       await hooks.backup(c.path, "local", c.local);
-    if (["upload", "merge"].includes(c.action) && c.remote)
+    }
+    if (["upload", "merge"].includes(c.action) && c.remote) {
+      await hooks.record?.(c.path, "backup-remote");
       await hooks.backup(c.path, "remote", c.remote);
-    if (["upload", "merge"].includes(c.action))
+    }
+    if (["upload", "merge"].includes(c.action)) {
+      await hooks.record?.(c.path, "write-remote");
       await remote.write(c.path, c.result);
-    if (["download", "merge"].includes(c.action))
-      await local.write(c.path, c.result);
+    }
+    if (["download", "merge"].includes(c.action)) {
+      await hooks.record?.(c.path, "write-local");
+      // Backups and remote uploads can take time. Re-inventory to detect a newly
+      // created destination, then check again inside VaultStore after mkdirs.
+      const current = await index(local);
+      checkNames(new Set([...current.keys(), ...ri.keys()]));
+      await assertUnchanged(
+        local,
+        current,
+        c.path,
+        c.local,
+        await hashOf(c.local)
+      );
+      await local.write(c.path, c.result, { hash: await hashOf(c.local) });
+    }
     // Never record convergence when a failed or partial upload changed the content.
-    const hash = await digest(c.result);
+    const hash = (await hashOf(c.result))!;
     if (
       (await digest(await local.read(c.path))) !== hash ||
       (await digest(await remote.read(c.path))) !== hash
@@ -279,11 +399,39 @@ export async function apply(
         "Post-write verification failed. Backups retained; preview again."
       );
     }
+    const previous = history[c.path];
     history[c.path] = {
       hash,
       text: c.path.toLowerCase().endsWith(".md") ? textOf(c.result) : undefined,
     };
-    await hooks.checkpoint(history);
+    try {
+      await hooks.checkpoint(history);
+    } catch (error) {
+      if (previous) history[c.path] = previous;
+      else delete history[c.path];
+      throw error;
+    }
+    await hooks.record?.(c.path, "verified");
+    hooks.progress?.({
+      phase: "apply",
+      completed: ++completed,
+      total: plan.changes.length,
+      path: c.path,
+    });
+  }
+  if (Object.keys(equalHistory).length) {
+    const previous = { ...history };
+    Object.assign(history, equalHistory);
+    try {
+      await hooks.checkpoint(history);
+    } catch (error) {
+      for (const path of Object.keys(equalHistory)) {
+        if (Object.prototype.hasOwnProperty.call(previous, path))
+          history[path] = previous[path];
+        else delete history[path];
+      }
+      throw error;
+    }
   }
   return conflicts;
 }

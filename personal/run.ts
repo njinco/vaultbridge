@@ -6,9 +6,14 @@ import type { Store } from "./engine";
 // cannot be recalled. Keep the run locked until that operation settles.
 export class SyncRun {
   cancelled = false;
-  cancel() { this.cancelled = true; }
+  cancel() {
+    this.cancelled = true;
+  }
   check() {
-    if (this.cancelled) throw new PersonalSyncError("Sync cancelled. Preview again before continuing.");
+    if (this.cancelled)
+      throw new PersonalSyncError(
+        "Sync cancelled. Preview again before continuing."
+      );
   }
   async step<T>(operation: () => Promise<T>): Promise<T> {
     this.check();
@@ -20,7 +25,8 @@ export class SyncRun {
     return {
       list: () => this.step(() => store.list()),
       read: (path) => this.step(() => store.read(path)),
-      write: (path, bytes) => this.step(() => store.write(path, bytes)),
+      write: (path, bytes, expected) =>
+        this.step(() => store.write(path, bytes, expected)),
     };
   }
 }

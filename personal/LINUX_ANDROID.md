@@ -52,8 +52,11 @@ both devices. Do not point the trial at your working prefix. A blank prefix
 targets the whole bucket. Encryption is an explicit choice; changing format
 or password does not migrate existing objects.
 
-Use **Preview VaultBridge sync**. Enter the passphrase when prompted, review the
-file actions, then Apply. Passwords remain in the current plugin session;
+Use **Check connection** first to list the target and read one bounded sample.
+Review any custom exclusions; use identical rules on both devices. Then use
+**Preview VaultBridge sync**. Enter the passphrase when prompted, inspect merged
+results, select the files to include and Apply. Filters hide rows without
+unchecking them. Passwords remain in the current plugin session;
 restart, Lock encryption or a failed preview requires unlocking again. Storage
 credentials are saved locally. Do not share the settings file or password.
 
@@ -93,7 +96,9 @@ requires authorizing your app again. Start each device with Preview.
 1. Create a scoped app in your [Dropbox App Console](https://www.dropbox.com/developers/apps).
    Choose App Folder for a new dedicated dataset, or Full Dropbox when you need
    access to an existing folder outside your new app's folder.
-2. Enable `files.metadata.read`, `files.content.read` and `files.content.write`.
+2. Enable `files.metadata.read`, `files.content.read`, `files.content.write` and
+   `account_info.read`. If adding the last scope to an existing app, authorize
+   it again so its tokens can identify the account.
    Create the vault folder in the app's accessible root first. An App Folder
    app cannot automatically read files owned by another App Folder app.
 3. For Linux, register an exact localhost redirect such as

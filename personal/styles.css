@@ -1,1 +1,5 @@
 .personal-sync-preview { max-height: 40vh; overflow: auto; overflow-wrap: anywhere; }
+.personal-sync-row { border-bottom: 1px solid var(--background-modifier-border); padding: 0.5em 0; }
+.personal-sync-diff { max-height: 30vh; overflow: auto; white-space: pre-wrap; font-size: var(--font-smaller); }
+.personal-sync-diff-local { background: var(--background-modifier-error); }
+.personal-sync-diff-remote { background: var(--background-modifier-success); }

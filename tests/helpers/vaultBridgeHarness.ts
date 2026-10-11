@@ -1,16 +1,29 @@
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { webcrypto } from "node:crypto";
+import { createHash, webcrypto } from "node:crypto";
 import { JSDOM } from "jsdom";
 import type { Plan } from "../../personal/engine";
 import type { Settings } from "../../personal/storage";
+import type { Saved } from "../../personal/state";
+export interface NativeRequest {
+  url: string;
+  method?: string;
+  body?: ArrayBuffer | string;
+  headers?: Record<string, string>;
+}
+export interface NativeReply {
+  status: number;
+  headers: Record<string, string>;
+  arrayBuffer: ArrayBuffer;
+}
 
 export const encode = (s: string): ArrayBuffer =>
   new TextEncoder().encode(s).buffer;
 export const decode = (b: ArrayBuffer): string => new TextDecoder().decode(b);
 export interface TestModal {
   plan?: Plan;
+  contentEl: HTMLElement;
   onOpen(): void;
   onClose(): void;
   open(): void;
@@ -43,23 +56,64 @@ class Channel {
 }
 const xml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-export function harness(password: string, desktop = false, options: {
-  workerMode?: "silent" | "crash";
-  beforeRequest?: (request: { method?: string }) => Promise<void>;
-} = {}) {
+export function harness(
+  password: string,
+  desktop = false,
+  options: {
+    workerMode?: "silent" | "crash";
+    beforeRequest?: (request: NativeRequest) => Promise<void>;
+    cloudResponse?: (request: NativeRequest) => Promise<NativeReply>;
+    omitETags?: boolean;
+    putStatus?: number;
+  } = {}
+) {
   const local = new Map<string, ArrayBuffer>(),
     remote = new Map<string, ArrayBuffer>();
   const localWrites: string[] = [],
-    calls: { method: string; key?: string }[] = [],
+    calls: {
+      method: string;
+      key?: string;
+      url?: string;
+      headers?: Record<string, string>;
+    }[] = [],
     notices: string[] = [],
     logs: unknown[][] = [];
   const modals: TestModal[] = [],
     buttons = new Map<string, () => unknown>(),
     workers: { terminated: boolean }[] = [];
+  const textChanges = new Map<string, (value: string) => unknown>();
+  const dropdownChanges = new Map<string, (value: string) => unknown>();
+  const dom = new JSDOM().window;
+  Object.assign(dom.HTMLElement.prototype, {
+    createEl(
+      this: HTMLElement,
+      tag: string,
+      options: {
+        text?: string;
+        cls?: string;
+        attr?: Record<string, string>;
+      } = {}
+    ) {
+      const child = dom.document.createElement(tag);
+      if (options.text !== undefined) child.textContent = options.text;
+      if (options.cls) child.className = options.cls;
+      for (const [name, value] of Object.entries(options.attr ?? {}))
+        child.setAttribute(name, value);
+      this.appendChild(child);
+      return child;
+    },
+    empty(this: HTMLElement) {
+      this.replaceChildren();
+    },
+  });
+  let settingsTab: { display(): void; containerEl: HTMLElement } | undefined;
   let textChange: ((value: string) => void) | undefined;
   const channels: Channel[] = [];
   class HarnessChannel extends Channel {
-    constructor() { super(); channels.push(this); }
+    constructor() {
+      super();
+      channels.push(this);
+    }
   }
   const logger = Object.fromEntries(
     ["log", "info", "debug", "warn", "error"].map((k) => [
@@ -175,6 +229,11 @@ export function harness(password: string, desktop = false, options: {
             localWrites.push(p);
             local.set(p, b.slice(0));
           },
+          trashLocal: async (p: string) => {
+            assert.ok(local.has(p));
+            local.set(`.trash/${p}`, local.get(p)!);
+            local.delete(p);
+          },
         },
       },
     };
@@ -186,20 +245,16 @@ export function harness(password: string, desktop = false, options: {
     async loadData() {
       return this.loaded;
     }
-    addSettingTab() {}
+    addSettingTab(tab: typeof settingsTab) {
+      settingsTab = tab;
+    }
     addCommand() {}
     addRibbonIcon() {}
   }
-  const el = {
-    createEl() {
-      return el;
-    },
-    empty() {},
-  };
   class Modal implements TestModal {
     plan?: Plan;
-    contentEl = el;
-    constructor(_app: unknown) {}
+    contentEl = dom.document.createElement("div");
+    constructor(readonly app: unknown) {}
     onOpen() {}
     onClose() {}
     open() {
@@ -211,18 +266,50 @@ export function harness(password: string, desktop = false, options: {
     }
   }
   class Setting {
-    constructor(_el: unknown) {}
-    setName(_s: string) {
+    private name = "";
+    constructor(readonly element: HTMLElement) {}
+    setName(s: string) {
+      this.name = s;
+      this.element.createEl("span", { text: s });
       return this;
     }
-    setDesc(_s: string) {
+    setDesc(s: string) {
+      this.element.createEl("p", { text: s });
       return this;
     }
     addText(f: (t: any) => void) {
+      const inputEl = this.element.createEl("input");
+      const name = this.name;
       const t = {
-        inputEl: { type: "text" },
+        inputEl,
+        setValue(value: string) {
+          inputEl.value = value;
+          return t;
+        },
         onChange(fn: (v: string) => void) {
           textChange = fn;
+          textChanges.set(name, fn);
+          inputEl.addEventListener("input", () => fn(inputEl.value));
+          return t;
+        },
+      };
+      f(t);
+      return this;
+    }
+    addTextArea(f: (t: any) => void) {
+      const inputEl = this.element.createEl("textarea");
+      const name = this.name;
+      const t = {
+        inputEl,
+        setValue(value: string) {
+          inputEl.value = value;
+          return t;
+        },
+        onChange(fn: (v: string) => unknown) {
+          textChanges.set(name, fn);
+          inputEl.addEventListener("input", () => {
+            void fn(inputEl.value);
+          });
           return t;
         },
       };
@@ -230,6 +317,7 @@ export function harness(password: string, desktop = false, options: {
       return this;
     }
     addDropdown(f: (d: any) => void) {
+      const name = this.name;
       const d = {
         addOptions() {
           return d;
@@ -237,28 +325,47 @@ export function harness(password: string, desktop = false, options: {
         setValue() {
           return d;
         },
-        onChange() {
+        onChange(fn: (value: string) => unknown) {
+          dropdownChanges.set(name, fn);
           return d;
         },
       };
       f(d);
       return this;
     }
+    addToggle(f: (toggle: any) => void) {
+      const toggle = {
+        setValue() {
+          return toggle;
+        },
+        onChange() {
+          return toggle;
+        },
+      };
+      f(toggle);
+      return this;
+    }
     addButton(f: (b: any) => void) {
       let label = "";
+      const button = this.element.createEl("button");
       const b = {
         setButtonText(s: string) {
           label = s;
+          button.textContent = s;
           return b;
         },
         setCta() {
           return b;
         },
-        setDisabled() {
+        setDisabled(value: boolean) {
+          button.disabled = value;
           return b;
         },
         onClick(fn: () => unknown) {
           buttons.set(label, fn);
+          button.addEventListener("click", () => {
+            void fn();
+          });
           return b;
         },
       };
@@ -268,7 +375,10 @@ export function harness(password: string, desktop = false, options: {
   }
   const obsidian = {
     Plugin,
-    PluginSettingTab: class {},
+    PluginSettingTab: class {
+      containerEl = dom.document.createElement("div");
+      constructor(readonly app: unknown) {}
+    },
     Modal,
     Setting,
     Notice: class {
@@ -278,16 +388,26 @@ export function harness(password: string, desktop = false, options: {
     },
     Platform: { isDesktopApp: desktop, isAndroidApp: !desktop },
     requireApiVersion: () => true,
-    requestUrl: async (r: {
-      url: string;
-      method?: string;
-      body?: ArrayBuffer;
-      headers?: Record<string, string>;
-    }) => {
+    requestUrl: async (r: NativeRequest) => {
       const url = new URL(r.url);
-      assert.equal(url.hostname, "s3.example.test");
       await options.beforeRequest?.(r);
       const method = r.method ?? "GET";
+      if (url.hostname !== "s3.example.test") {
+        assert.ok(options.cloudResponse, "No real cloud transport is allowed");
+        calls.push({ method, url: r.url, headers: r.headers });
+        return options.cloudResponse(r);
+      }
+      const version = (key: string) =>
+        `"${createHash("md5")
+          .update(new Uint8Array(remote.get(key)!))
+          .digest("hex")}"`;
+      const error = (status: number) => ({
+        status,
+        headers: { "content-type": "application/xml" },
+        arrayBuffer: encode(
+          `<Error><Code>${status === 412 ? "PreconditionFailed" : "NotImplemented"}</Code><Message>private provider detail</Message></Error>`
+        ),
+      });
       if (url.searchParams.get("list-type") === "2") {
         calls.push({ method });
         assert.equal(method, "GET");
@@ -295,7 +415,7 @@ export function harness(password: string, desktop = false, options: {
         const contents = Array.from(
           remote,
           ([key, b]) =>
-            `<Contents><Key>existing/${xml(key)}</Key><LastModified>2024-01-01T00:00:00Z</LastModified><Size>${b.byteLength}</Size></Contents>`
+            `<Contents><Key>existing/${xml(key)}</Key><LastModified>2024-01-01T00:00:00Z</LastModified><Size>${b.byteLength}</Size>${options.omitETags ? "" : `<ETag>${version(key)}</ETag>`}</Contents>`
         ).join("");
         return {
           status: 200,
@@ -308,18 +428,36 @@ export function harness(password: string, desktop = false, options: {
       const path = decodeURIComponent(url.pathname);
       assert.ok(path.startsWith("/bucket/existing/"));
       const key = path.slice("/bucket/existing/".length);
-      calls.push({ method, key });
+      calls.push({ method, key, headers: r.headers });
       if (method === "PUT") {
         assert.ok(r.body);
+        assert.ok(
+          r.headers?.["if-match"] || r.headers?.["if-none-match"],
+          "Every PUT must be conditional"
+        );
+        if (options.putStatus) return error(options.putStatus);
+        if (
+          (r.headers?.["if-none-match"] === "*" && remote.has(key)) ||
+          (r.headers?.["if-match"] !== undefined &&
+            (!remote.has(key) || r.headers["if-match"] !== version(key)))
+        )
+          return error(412);
+        assert.ok(typeof r.body !== "string");
         remote.set(key, r.body.slice(0));
       } else assert.ok(["GET", "HEAD"].includes(method));
+      if (
+        method === "GET" &&
+        r.headers?.["if-match"] !== undefined &&
+        (!remote.has(key) || r.headers["if-match"] !== version(key))
+      )
+        return error(412);
       assert.ok(remote.has(key), "remote object must exist");
       return {
         status: 200,
         headers: {
           "content-type": "application/octet-stream",
           "content-length": String(remote.get(key)!.byteLength),
-          etag: '"test-etag"',
+          ...(options.omitETags ? {} : { etag: version(key) }),
           "last-modified": "Mon, 01 Jan 2024 00:00:00 GMT",
           "x-amz-meta-mtime": "1704067200",
           "x-amz-meta-ctime": "1704067200",
@@ -329,16 +467,17 @@ export function harness(password: string, desktop = false, options: {
       };
     },
   };
-  const dom = new JSDOM().window;
   const module = {
     exports: {} as {
       default: new () => Plugin & {
-        state: { settings: Settings; histories: Record<string, unknown> };
+        state: Saved;
         sessionPassword: string;
         busy: boolean;
-        start(): Promise<void>;
+        start(checkOnly?: boolean): Promise<void>;
         onload(): Promise<void>;
         onunload(): void;
+        browseBackups(): Promise<void>;
+        persist(): Promise<void>;
       };
     },
   };
@@ -415,8 +554,33 @@ export function harness(password: string, desktop = false, options: {
     notices,
     logs,
     workers,
+    modals,
+    async click(label: string) {
+      const fn = buttons.get(label);
+      assert.ok(fn, label);
+      await fn();
+    },
+    changeText(label: string, value: string) {
+      const fn = textChanges.get(label);
+      assert.ok(fn, label);
+      return fn(value);
+    },
+    changeDropdown(label: string, value: string) {
+      const fn = dropdownChanges.get(label);
+      assert.ok(fn, label);
+      return fn(value);
+    },
+    displaySettings() {
+      assert.ok(settingsTab);
+      settingsTab.display();
+      return settingsTab.containerEl;
+    },
     channels,
-    cancel() { const cancel = buttons.get("Cancel"); assert.ok(cancel); return cancel(); },
+    cancel() {
+      const cancel = buttons.get("Cancel");
+      assert.ok(cancel);
+      return cancel();
+    },
     async preview() {
       modals.length = 0;
       buttons.clear();

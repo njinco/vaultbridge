@@ -99,7 +99,10 @@ export class CloudSession {
     this.pendingSave = false;
     return c.accessToken;
   }
-  async request(r: Request, allowedStatuses: readonly number[] = []): Promise<Response> {
+  async request(
+    r: Request,
+    allowedStatuses: readonly number[] = []
+  ): Promise<Response> {
     const u = new URL(r.url);
     const allowed =
       this.provider === "google"
@@ -115,7 +118,8 @@ export class CloudSession {
       throw new PersonalSyncError(
         "Refusing to send credentials to an unexpected host."
       );
-    const send = async () => this.transport({
+    const send = async () =>
+      this.transport({
         ...r,
         headers: {
           ...r.headers,
@@ -129,7 +133,9 @@ export class CloudSession {
       this.credentials.expiresAt = 0;
       response = await send();
     }
-    return allowedStatuses.includes(response.status) ? response : accepted(response);
+    return allowedStatuses.includes(response.status)
+      ? response
+      : accepted(response);
   }
   async api<T>(url: string, method = "GET", body?: unknown): Promise<T> {
     return json<T>(
@@ -141,6 +147,38 @@ export class CloudSession {
         body: body === undefined ? undefined : JSON.stringify(body),
       })
     );
+  }
+  async accountIdentity(): Promise<string> {
+    const response = await (this.provider === "google"
+      ? this.api<{ user?: { permissionId?: unknown } }>(
+          "https://www.googleapis.com/drive/v3/about?fields=user(permissionId)"
+        )
+      : this.api<{ account_id?: unknown }>(
+          "https://api.dropboxapi.com/2/users/get_current_account",
+          "POST",
+          null
+        )
+    ).catch((error: unknown) => {
+      if (
+        this.provider === "dropbox" &&
+        error instanceof PersonalSyncError &&
+        error.message === "Cloud request failed (HTTP 403)."
+      )
+        throw new PersonalSyncError(
+          "Dropbox account identity requires account_info.read. Grant that scope and authorize your app again."
+        );
+      throw error;
+    });
+    const id =
+      this.provider === "google"
+        ? (response as { user?: { permissionId?: unknown } })?.user
+            ?.permissionId
+        : (response as { account_id?: unknown })?.account_id;
+    if (typeof id !== "string" || !/^[A-Za-z0-9:_-]{1,256}$/.test(id))
+      throw new PersonalSyncError(
+        "Cloud account identity could not be verified. For Dropbox, grant account_info.read and authorize your app again."
+      );
+    return id;
   }
 }
 interface Item {
@@ -250,11 +288,20 @@ interface DriveFile {
   trashed?: boolean;
 }
 function driveItem(x: DriveFile): Item {
-  if (!x || typeof x.id !== "string" || !/^[A-Za-z0-9_-]+$/.test(x.id) ||
-      typeof x.name !== "string" || !x.name || x.name.includes("/") ||
-      typeof x.mimeType !== "string" || !x.mimeType ||
-      (x.size !== undefined && (typeof x.size !== "string" || !/^\d+$/.test(x.size) ||
-        !Number.isSafeInteger(Number(x.size)))))
+  if (
+    !x ||
+    typeof x.id !== "string" ||
+    !/^[A-Za-z0-9_-]+$/.test(x.id) ||
+    typeof x.name !== "string" ||
+    !x.name ||
+    x.name.includes("/") ||
+    typeof x.mimeType !== "string" ||
+    !x.mimeType ||
+    (x.size !== undefined &&
+      (typeof x.size !== "string" ||
+        !/^\d+$/.test(x.size) ||
+        !Number.isSafeInteger(Number(x.size))))
+  )
     throw new PersonalSyncError("Invalid Google Drive file metadata.");
   if (
     x.mimeType?.startsWith("application/vnd.google-apps.") &&
@@ -271,15 +318,28 @@ function driveItem(x: DriveFile): Item {
   };
 }
 export class GoogleStore extends TreeStore {
-  private uploaded(path: string, bytes: ArrayBuffer, response: Response, existing?: Item) {
+  private uploaded(
+    path: string,
+    bytes: ArrayBuffer,
+    response: Response,
+    existing?: Item
+  ) {
     const item = driveItem(json<DriveFile>(response));
-    if (item.folder || item.name !== path.split("/").pop() ||
-        (existing && item.id !== existing.id) ||
-        (item.size !== undefined && item.size !== bytes.byteLength))
-      throw new PersonalSyncError("Google Drive upload metadata did not match the file. Preview again.");
+    if (
+      item.folder ||
+      item.name !== path.split("/").pop() ||
+      (existing && item.id !== existing.id) ||
+      (item.size !== undefined && item.size !== bytes.byteLength)
+    )
+      throw new PersonalSyncError(
+        "Google Drive upload metadata did not match the file. Preview again."
+      );
     this.items.set(path, item);
   }
-  private async uploadSession(location: string, bytes: ArrayBuffer): Promise<Response> {
+  private async uploadSession(
+    location: string,
+    bytes: ArrayBuffer
+  ): Promise<Response> {
     const total = bytes.byteLength;
     let offset = 0;
     // Recover only this session, with a strict request bound. Never restart a
@@ -288,40 +348,67 @@ export class GoogleStore extends TreeStore {
     for (let attempt = 0; attempt < 4; attempt++) {
       let response: Response | undefined;
       try {
-        response = await this.session.request({
-          url: location, method: "PUT",
-          headers: {
-            "Content-Type": "application/octet-stream",
-            "Content-Length": String(total - offset),
-            "Content-Range": `bytes ${offset}-${total - 1}/${total}`,
+        response = await this.session.request(
+          {
+            url: location,
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "Content-Length": String(total - offset),
+              "Content-Range": `bytes ${offset}-${total - 1}/${total}`,
+            },
+            body: bytes.slice(offset),
           },
-          body: bytes.slice(offset),
-        }, statuses);
+          statuses
+        );
       } catch (error) {
         if (error instanceof PersonalSyncError) throw error;
         // A transport failure may follow a successful write. Query its status.
       }
       if (!response || response.status >= 500) {
-        response = await this.session.request({
-          url: location, method: "PUT",
-          headers: { "Content-Length": "0", "Content-Range": `bytes */${total}` },
-          body: new ArrayBuffer(0),
-        }, statuses);
+        response = await this.session.request(
+          {
+            url: location,
+            method: "PUT",
+            headers: {
+              "Content-Length": "0",
+              "Content-Range": `bytes */${total}`,
+            },
+            body: new ArrayBuffer(0),
+          },
+          statuses
+        );
       }
       if (response.status === 200 || response.status === 201) return response;
       if (response.status === 404)
-        throw new PersonalSyncError("Google Drive upload session expired. Preview again before retrying.");
+        throw new PersonalSyncError(
+          "Google Drive upload session expired. Preview again before retrying."
+        );
       if (response.status !== 308)
-        throw new PersonalSyncError("Google Drive upload was interrupted. Preview again before retrying.");
-      const range = Object.entries(response.headers).find(([k]) => k.toLowerCase() === "range")?.[1];
-      const match = range === undefined ? undefined : /^bytes=0-(\d+)$/.exec(range);
+        throw new PersonalSyncError(
+          "Google Drive upload was interrupted. Preview again before retrying."
+        );
+      const range = Object.entries(response.headers).find(
+        ([k]) => k.toLowerCase() === "range"
+      )?.[1];
+      const match =
+        range === undefined ? undefined : /^bytes=0-(\d+)$/.exec(range);
       const next = match ? Number(match[1]) + 1 : 0;
-      if ((range !== undefined && !match) || !Number.isSafeInteger(next) ||
-          next < offset || next >= total || (attempt > 0 && next === offset))
-        throw new PersonalSyncError("Invalid or stalled Google Drive upload progress. Preview again.");
+      if (
+        (range !== undefined && !match) ||
+        !Number.isSafeInteger(next) ||
+        next < offset ||
+        next >= total ||
+        (attempt > 0 && next === offset)
+      )
+        throw new PersonalSyncError(
+          "Invalid or stalled Google Drive upload progress. Preview again."
+        );
       offset = next;
     }
-    throw new PersonalSyncError("Google Drive upload recovery limit reached. Preview again.");
+    throw new PersonalSyncError(
+      "Google Drive upload recovery limit reached. Preview again."
+    );
   }
   async children(id: string): Promise<Item[]> {
     const result: Item[] = [],
@@ -394,7 +481,12 @@ export class GoogleStore extends TreeStore {
           "Google Drive did not supply an upload session URL."
         );
       // CloudSession checks the session hostname before forwarding credentials.
-      this.uploaded(path, bytes, await this.uploadSession(location, bytes), existing);
+      this.uploaded(
+        path,
+        bytes,
+        await this.uploadSession(location, bytes),
+        existing
+      );
       return;
     }
     // Multipart upload, one request: no empty file is created before its content.
@@ -411,11 +503,11 @@ export class GoogleStore extends TreeStore {
     body.set(new Uint8Array(bytes), start.length);
     body.set(end, start.length + bytes.byteLength);
     const response = await this.session.request({
-        url: `https://www.googleapis.com/upload/drive/v3/files${suffix}?uploadType=multipart&fields=id,name,mimeType,size&supportsAllDrives=true`,
-        method: existing ? "PATCH" : "POST",
-        headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
-        body: body.buffer,
-      });
+      url: `https://www.googleapis.com/upload/drive/v3/files${suffix}?uploadType=multipart&fields=id,name,mimeType,size&supportsAllDrives=true`,
+      method: existing ? "PATCH" : "POST",
+      headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
+      body: body.buffer,
+    });
     this.uploaded(path, bytes, response, existing);
   }
 }
@@ -447,30 +539,48 @@ export class DropboxStore implements Store {
   }
   private item(value: DropboxItem, file: boolean): string {
     const root = this.root();
-    if (!value || typeof value.path_display !== "string" ||
-        !value.path_display.toLowerCase().startsWith(`${root}/`.toLowerCase()) ||
-        typeof value.name !== "string" || !value.name ||
-        value.name !== value.path_display.split("/").pop() ||
-        typeof value.id !== "string" || !value.id.startsWith("id:") || value.id.length <= 3 ||
-        (value.path_lower !== undefined && value.path_lower !== value.path_display.toLowerCase()))
+    if (
+      !value ||
+      typeof value.path_display !== "string" ||
+      !value.path_display.toLowerCase().startsWith(`${root}/`.toLowerCase()) ||
+      typeof value.name !== "string" ||
+      !value.name ||
+      value.name !== value.path_display.split("/").pop() ||
+      typeof value.id !== "string" ||
+      !value.id.startsWith("id:") ||
+      value.id.length <= 3 ||
+      (value.path_lower !== undefined &&
+        value.path_lower !== value.path_display.toLowerCase())
+    )
       throw new PersonalSyncError("Invalid or out-of-scope Dropbox metadata.");
-    const path = value.path_display.split("/").slice(root.split("/").length).join("/");
+    const path = value.path_display
+      .split("/")
+      .slice(root.split("/").length)
+      .join("/");
     validatePath(path);
-    if (file && (
-      (value[".tag"] !== undefined && value[".tag"] !== "file") ||
-      typeof value.rev !== "string" || !/^[0-9a-f]{9,}$/.test(value.rev) ||
-      typeof value.size !== "number" || !Number.isSafeInteger(value.size) || value.size < 0 ||
-      (value.is_downloadable !== undefined && value.is_downloadable !== true) ||
-      value.symlink_info !== undefined
-    ))
-      throw new PersonalSyncError("Invalid or unsupported Dropbox file metadata.");
+    if (
+      file &&
+      ((value[".tag"] !== undefined && value[".tag"] !== "file") ||
+        typeof value.rev !== "string" ||
+        !/^[0-9a-f]{9,}$/.test(value.rev) ||
+        typeof value.size !== "number" ||
+        !Number.isSafeInteger(value.size) ||
+        value.size < 0 ||
+        (value.is_downloadable !== undefined &&
+          value.is_downloadable !== true) ||
+        value.symlink_info !== undefined)
+    )
+      throw new PersonalSyncError(
+        "Invalid or unsupported Dropbox file metadata."
+      );
     return path;
   }
   async list(): Promise<Entry[]> {
     this.ready = false;
     this.items.clear();
     const result: Entry[] = [],
-      seen = new Set<string>(), names = new Set<string>();
+      seen = new Set<string>(),
+      names = new Set<string>();
     let r = await this.session.api<{
       entries: DropboxItem[];
       cursor: string;
@@ -482,8 +592,13 @@ export class DropboxStore implements Store {
       include_non_downloadable_files: true,
     });
     for (let page = 0; page < 10000; page++) {
-      if (!r || !Array.isArray(r.entries) || typeof r.has_more !== "boolean" ||
-          typeof r.cursor !== "string" || !r.cursor)
+      if (
+        !r ||
+        !Array.isArray(r.entries) ||
+        typeof r.has_more !== "boolean" ||
+        typeof r.cursor !== "string" ||
+        !r.cursor
+      )
         throw new PersonalSyncError("Incomplete Dropbox listing.");
       for (const x of r.entries) {
         if (!x || (x[".tag"] !== "file" && x[".tag"] !== "folder"))
@@ -491,7 +606,9 @@ export class DropboxStore implements Store {
         const path = this.item(x, x[".tag"] === "file");
         const folded = path.normalize("NFC").toLowerCase();
         if (names.has(folded))
-          throw new PersonalSyncError("Duplicate Dropbox paths; preview again.");
+          throw new PersonalSyncError(
+            "Duplicate Dropbox paths; preview again."
+          );
         names.add(folded);
         if (x[".tag"] === "folder") continue;
         this.items.set(path, x);
@@ -510,59 +627,89 @@ export class DropboxStore implements Store {
         { cursor: r.cursor }
       );
     }
-    throw new PersonalSyncError("Dropbox listing exceeds the page safety limit.");
+    throw new PersonalSyncError(
+      "Dropbox listing exceeds the page safety limit."
+    );
   }
   async read(path: string): Promise<ArrayBuffer> {
     const expected = this.items.get(path);
     if (!this.ready || !expected)
-      throw new PersonalSyncError("File missing from complete Dropbox inventory.");
+      throw new PersonalSyncError(
+        "File missing from complete Dropbox inventory."
+      );
     const response = await this.session.request({
-        url: "https://content.dropboxapi.com/2/files/download",
-        method: "POST",
-        headers: { "Dropbox-API-Arg": asciiJSON({ path: this.path(path) }) },
-      });
+      url: "https://content.dropboxapi.com/2/files/download",
+      method: "POST",
+      headers: { "Dropbox-API-Arg": asciiJSON({ path: this.path(path) }) },
+    });
     let metadata: DropboxItem;
     try {
-      const header = Object.entries(response.headers).find(([k]) => k.toLowerCase() === "dropbox-api-result")?.[1];
+      const header = Object.entries(response.headers).find(
+        ([k]) => k.toLowerCase() === "dropbox-api-result"
+      )?.[1];
       if (!header) throw Error();
       metadata = JSON.parse(header);
     } catch {
-      throw new PersonalSyncError("Missing or invalid Dropbox download metadata.");
+      throw new PersonalSyncError(
+        "Missing or invalid Dropbox download metadata."
+      );
     }
-    if (this.item(metadata, true) !== path || metadata.id !== expected.id ||
-        metadata.rev !== expected.rev || metadata.size !== response.body.byteLength)
-      throw new PersonalSyncError("Dropbox file changed or download was incomplete. Preview again.");
+    if (
+      this.item(metadata, true) !== path ||
+      metadata.id !== expected.id ||
+      metadata.rev !== expected.rev ||
+      metadata.size !== response.body.byteLength
+    )
+      throw new PersonalSyncError(
+        "Dropbox file changed or download was incomplete. Preview again."
+      );
     return response.body;
   }
   async write(path: string, bytes: ArrayBuffer): Promise<void> {
     if (!this.ready)
-      throw new PersonalSyncError("Complete a Dropbox inventory before writing.");
+      throw new PersonalSyncError(
+        "Complete a Dropbox inventory before writing."
+      );
     const expected = this.items.get(path);
     // Dropbox creates missing parent folders for uploads. The root must already
     // exist before the read-only list call can succeed.
-    const response = await this.session.request({
-      url: "https://content.dropboxapi.com/2/files/upload",
-      method: "POST",
-      headers: {
-        "Content-Type": "application/octet-stream",
-        "Dropbox-API-Arg": asciiJSON({
-          path: this.path(path),
-          mode: expected ? { ".tag": "update", update: expected.rev } : { ".tag": "add" },
-          autorename: false,
-          strict_conflict: true,
-          mute: true,
-        }),
+    const response = await this.session.request(
+      {
+        url: "https://content.dropboxapi.com/2/files/upload",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "Dropbox-API-Arg": asciiJSON({
+            path: this.path(path),
+            mode: expected
+              ? { ".tag": "update", update: expected.rev }
+              : { ".tag": "add" },
+            autorename: false,
+            strict_conflict: true,
+            mute: true,
+          }),
+        },
+        body: bytes,
       },
-      body: bytes,
-    }, [409, 429]);
+      [409, 429]
+    );
     if (response.status === 409)
-      throw new PersonalSyncError("Dropbox rejected the upload because of a conflict or storage restriction. Preview again.");
+      throw new PersonalSyncError(
+        "Dropbox rejected the upload because of a conflict or storage restriction. Preview again."
+      );
     if (response.status === 429)
-      throw new PersonalSyncError("Dropbox is rate limiting uploads. Wait before previewing again.");
+      throw new PersonalSyncError(
+        "Dropbox is rate limiting uploads. Wait before previewing again."
+      );
     const metadata = json<DropboxItem>(response);
-    if (this.item(metadata, true) !== path || metadata.size !== bytes.byteLength ||
-        (expected && metadata.id !== expected.id))
-      throw new PersonalSyncError("Dropbox upload metadata did not match the file. Preview again.");
+    if (
+      this.item(metadata, true) !== path ||
+      metadata.size !== bytes.byteLength ||
+      (expected && metadata.id !== expected.id)
+    )
+      throw new PersonalSyncError(
+        "Dropbox upload metadata did not match the file. Preview again."
+      );
     this.items.set(path, metadata);
   }
 }

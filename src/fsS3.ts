@@ -110,6 +110,7 @@ class ObsHttpHandler extends FetchHttpHandler {
     }
 
     const param: RequestUrlParam = {
+      throw: false,
       body: transformedBody,
       headers: transformedHeaders,
       method: method,
